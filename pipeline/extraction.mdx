@@ -138,7 +138,7 @@ Introspects the OLTP database engine using SQLAlchemy's `inspect()` and returns 
   </Card>
 </CardGroup>
 
-Schema filtering uses a case-insensitive comparison (`schema.lower() in system_schemas`) so mixed-case schema names like `INFORMATION_SCHEMA` are correctly excluded regardless of how SQL Server returns them.
+Schema filtering applies `schema.lower()` before testing membership in `system_schemas`. All-lowercase entries in the set (`sys`, `guest`, `db_owner`, and the other `db_*` role names) are therefore reliably excluded. The set also contains `"INFORMATION_SCHEMA"` in its original mixed-case form; because the comparison lowercases the incoming name to `"information_schema"` before testing, this entry is effectively never matched. In practice, SQL Server's SQLAlchemy dialect returns `INFORMATION_SCHEMA` in uppercase, so the `information_schema` schema — not present in the set — does not filter it out. User schemas with entirely lowercase names are unaffected.
 
 ```python
 tables = extractor.extract_tables()

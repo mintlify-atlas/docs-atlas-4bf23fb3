@@ -1,7 +1,7 @@
 ---
 title: "ETL Dinámico System Architecture: Four-Layer Design"
 sidebarTitle: "Overview"
-description: "ETL Dinámico uses a clean four-layer architecture separating configuration, infrastructure, service logic, and the Streamlit UI to keep each concern isolated."
+description: "ETL Dinámico uses a four-layer architecture separating configuration, infrastructure, service logic, and the Streamlit UI to keep each concern isolated."
 ---
 
 The **ETL Dinámico para Data Warehouse** system is organized into four distinct layers, each with a single, clearly bounded responsibility. Configuration lives at the bottom, providing connection URLs to the infrastructure layer above it. The infrastructure layer hands live SQLAlchemy engines to the services layer, which handles all ETL logic. The presentation layer sits at the top, calling the pipeline and displaying results — it never touches the database directly. This strict separation means you can swap the UI framework, change a database driver, or add a new transformation type without touching any other layer.

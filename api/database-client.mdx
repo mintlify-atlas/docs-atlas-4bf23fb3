@@ -1,7 +1,7 @@
 ---
 title: "DatabaseClient — Dual SQL Server Connection Manager"
 sidebarTitle: "DatabaseClient"
-description: "DatabaseClient manages SQLAlchemy engines for both OLTP and OLAP SQL Server databases, providing connection context managers and schema introspection methods."
+description: "DatabaseClient manages SQLAlchemy engines for OLTP and OLAP SQL Server databases, exposing connection context managers and schema introspection helpers."
 ---
 
 `DatabaseClient` is the single entry point for all database connectivity in the ETL pipeline. It holds two SQLAlchemy engines — one for the OLTP source (SQL Server transactional database) and one for the OLAP target (Data Warehouse) — and exposes connection context managers plus schema introspection helpers used by every downstream service. Both engines are created with `pool_pre_ping=True`, which silently recycles stale connections before handing them to callers.

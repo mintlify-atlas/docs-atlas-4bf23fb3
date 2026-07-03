@@ -1,7 +1,7 @@
 ---
 title: "DataTransformer — Pandas-Based Column Transformations"
 sidebarTitle: "DataTransformer"
-description: "DataTransformer applies text case conversion, date component extraction, and column concatenation to Pandas DataFrames. No database calls — pure Pandas operations."
+description: "DataTransformer applies case conversion, date extraction, and column concatenation to Pandas DataFrames. Pure in-memory operations — no database calls."
 ---
 
 `DataTransformer` handles the **Transform** phase of the ETL pipeline entirely in memory using Pandas. It receives a DataFrame produced by `DataExtractor`, applies one or more column-level transformations, and writes each result into a new column — leaving the original source columns intact. Because every method both modifies the DataFrame in-place **and** returns it, you can chain calls or pass the DataFrame directly into subsequent pipeline steps without intermediate copies.

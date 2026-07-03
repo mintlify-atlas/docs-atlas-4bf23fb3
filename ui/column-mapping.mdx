@@ -1,5 +1,5 @@
 ---
-title: "Configuring Column Mappings and Transformations"
+title: "Configure Column Mappings and Transformations in ETL"
 sidebarTitle: "Column Mapping"
 description: "Map OLTP source columns to Data Warehouse target columns and apply transformations like uppercase, lowercase, date extraction, and concatenation in the UI."
 ---
@@ -12,7 +12,7 @@ The column mapping section is the core of the ETL Dinámico interface. It connec
 
 Each source column gets its own row in a three-column grid:
 
-```
+```text
 ┌──────────────────────┬──────────────────────┬───────────────────────────┐
 │   Columna origen     │   Transformación     │    Columna destino        │
 │  (read-only)         │  (dropdown)          │  (dropdown)               │
@@ -157,7 +157,15 @@ The `_validar_y_ejecutar()` function enforces the following rules before submitt
 </Accordion>
 
 <Accordion title="Business key must be in the mapped target columns">
-  The value selected as the business key must appear as `target_column` in at least one regular mapping (not a concat). This guarantees the incremental deduplication key is actually present in the DataFrame being loaded.
+  The value selected as the business key must appear as `target_column` in at least one mapping — regular or concat. `_validar_y_ejecutar` builds `mapped_targets` from all entries in `column_mappings` regardless of type, and checks that `business_key in mapped_targets`. This guarantees the incremental deduplication key is present in the DataFrame being loaded.
+</Accordion>
+
+<Accordion title="Non-concat mappings must have a source column">
+  Every entry in `column_mappings` that does not have `"type": "concat"` must provide a non-empty `source_column` value. A mapping row left with no source column selected will trigger this error: `Cada mapeo debe tener una columna origen.`
+</Accordion>
+
+<Accordion title="Every mapping must have a target column">
+  Every entry in `column_mappings` — whether a regular mapping or a concat mapping — must provide a non-empty `target_column` value. Missing the destination column triggers: `Cada mapeo debe tener una columna destino.`
 </Accordion>
 
 <Accordion title="Concat mappings require both source columns">

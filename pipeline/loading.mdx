@@ -27,7 +27,7 @@ load_incremental(df_transformer, table_name: str, business_key: str) -> int
 </ParamField>
 
 <ParamField path="table_name" type="str" required>
-  Name of the target table in the OLAP Data Warehouse (e.g., `"DimCustomers"`). The table must already exist — `load_incremental` uses `if_exists='append'` and will not create a new table.
+  Name of the target table in the OLAP Data Warehouse (e.g., `"DimCustomers"`). `load_incremental` uses `if_exists='append'`, which appends rows when the table already exists and creates the table automatically on the first run when it does not yet exist.
 </ParamField>
 
 <ParamField path="business_key" type="str" required>
@@ -129,7 +129,7 @@ print(rows_inserted)  # 5
 ---
 
 <Warning>
-  The target table **must already exist** in the Data Warehouse before calling `load_incremental`. The method uses `if_exists='append'`, which will raise an error if the table does not exist. It will never create a new table or replace an existing one. Use your DW schema management tooling to create the destination table before running the pipeline for the first time.
+  `load_incremental` uses `if_exists='append'` when writing to the Data Warehouse. Pandas will create the target table automatically if it does not yet exist on the first run, inferring column types from the DataFrame. For production use, create the table in advance with explicit types and constraints — auto-created tables may use wider or looser types than intended, and the business key column will not have a primary key or index unless you add one separately.
 </Warning>
 
 <Tip>

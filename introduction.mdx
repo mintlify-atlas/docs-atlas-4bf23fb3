@@ -1,7 +1,7 @@
 ---
 title: "ETL Dinámico: Dynamic Data Warehouse ETL for SQL Server"
 sidebarTitle: "Introduction"
-description: "ETL Dinámico is a modular Python ETL system that extracts from SQL Server OLTP, transforms data with Pandas, and loads incrementally into a Data Warehouse."
+description: "ETL Dinámico is a modular Python ETL system that extracts from SQL Server OLTP, transforms with Pandas, and loads incrementally into a Data Warehouse."
 ---
 
 ETL Dinámico is a modular, runtime-configurable ETL (Extract, Transform, Load) system built entirely in Python. It bridges an operational SQL Server database (OLTP) with a Data Warehouse (OLAP) by orchestrating extraction, transformation, and incremental loading — all driven by configuration that is defined at runtime through a Streamlit interface or through Python code directly, without touching a single line of pipeline logic.
@@ -82,11 +82,28 @@ Rather than truncating and reloading destination tables on every run, ETL Dinám
 
 ### Column Mappings and Transform Types
 
-Each pipeline run is driven by a list of column mapping dictionaries. Each mapping declares:
+Each pipeline run is driven by a list of column mapping dictionaries. Two distinct shapes are supported:
 
-- **`source_column`** — the column name in the source DataFrame.
-- **`transform_type`** — one of `none`, `upper`, `lower`, `year`, `month`, `day`, or the special type `concat` (which combines two source columns).
-- **`target_column`** — the column name to write in the destination DataFrame.
+**Standard mapping** — applies a single-column transformation:
+
+```python
+{
+    "source_column": "CompanyName",   # column name in the source DataFrame
+    "transform_type": "upper",        # one of: none, upper, lower, year, month, day
+    "target_column": "CompanyName"    # column name to write in the destination DataFrame
+}
+```
+
+**Concatenation mapping** — combines two source columns into one:
+
+```python
+{
+    "type": "concat",
+    "column1": "FirstName",
+    "column2": "LastName",
+    "target_column": "FullName"
+}
+```
 
 This design means transformation logic lives in data, not in code, making every pipeline configuration inspectable, serializable, and reproducible.
 

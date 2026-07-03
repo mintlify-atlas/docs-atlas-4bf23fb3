@@ -1,7 +1,7 @@
 ---
-title: "ETLPipeline — Full ETL Orchestration"
+title: "ETLPipeline — Runtime-Configured ETL Orchestrator"
 sidebarTitle: "ETLPipeline"
-description: "ETLPipeline.run_dynamic_etl() orchestrates DataExtractor, DataTransformer, and DataLoader into a single call. Configure column mappings at runtime via a list of dicts."
+description: "ETLPipeline.run_dynamic_etl() wires DataExtractor, DataTransformer, and DataLoader into one call, driven by a runtime column_mappings list of dicts."
 ---
 
 `ETLPipeline` is the top-level orchestrator that wires together the three ETL services — `DataExtractor`, `DataTransformer`, and `DataLoader` — into a single callable workflow. Rather than hard-coding column relationships at design time, the pipeline is driven by a `column_mappings` list that you supply at runtime, making it possible for a Streamlit UI (or any other caller) to configure extraction, transformation, and loading entirely through data. A single call to `run_dynamic_etl()` handles all four pipeline stages: extract, transform, column selection, and incremental load.
@@ -36,7 +36,7 @@ Executes a complete Extract → Transform → Select → Load cycle. The behavio
 
 **Execution order:**
 
-1. **Extract** — if `source_table` is non-empty, calls `self.extractor.extract_by_table()` with the union of all columns referenced in `column_mappings`. If `sql_query` is provided, calls `self.extractor.extract_by_query()` instead (and `sql_query` takes precedence).
+1. **Extract** — if `source_table` is non-empty, calls `self.extractor.extract_by_table()` with the union of all columns referenced in `column_mappings`. If `sql_query` is also provided, `self.extractor.extract_by_query()` runs immediately after and its result overwrites the table-based extract, giving `sql_query` effective precedence. When only `sql_query` is supplied (and `source_table` is an empty string), only `extract_by_query()` runs.
 2. **Transform** — iterates over `column_mappings` in order, dispatching each entry to the appropriate `DataTransformer` method.
 3. **Select** — builds a final column list from all `target_column` values plus `business_key`, and projects the DataFrame to those columns only.
 4. **Load** — calls `self.loader.load_incremental()` with the projected DataFrame, `target_table`, and `business_key`.
@@ -50,7 +50,7 @@ Executes a complete Extract → Transform → Select → Load cycle. The behavio
 </ParamField>
 
 <ParamField path="business_key" type="str" required>
-  Column name used for incremental deduplication. Must exist in both the transformed DataFrame and the `target_table` in the DW. Rows whose business key already appears in the DW are not re-inserted. The column is also automatically included in the final projection even if it is not listed explicitly in `column_mappings`.
+  Column name used for incremental deduplication. Must exist in both the transformed DataFrame and the `target_table` in the DW. Rows whose business key already appears in the DW are not re-inserted. The pipeline adds `business_key` to the final column projection automatically so it is always present in the data passed to `DataLoader`, but the business key column must still appear as a `target_column` in at least one `column_mappings` entry (typically a `"transform_type": "none"` direct copy) so that the column exists in the DataFrame before the projection step runs.
 </ParamField>
 
 <ParamField path="column_mappings" type="list[dict]" required>

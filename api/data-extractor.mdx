@@ -1,5 +1,5 @@
 ---
-title: "DataExtractor — SQL Server OLTP Data Extraction"
+title: "DataExtractor — SQL Server OLTP Table Extraction"
 sidebarTitle: "DataExtractor"
 description: "DataExtractor reads from SQL Server OLTP using SQLAlchemy, returning Pandas DataFrames from full-table selects, custom SQL queries, or table discovery."
 ---
@@ -19,7 +19,7 @@ extractor = DataExtractor(db)
 ### Constructor
 
 <ParamField path="db_client" type="DatabaseClient" required>
-  An initialised `DatabaseClient` instance. `DataExtractor` stores it as `self.db` and calls `self.db.get_oltp_connection()` for every extraction, ensuring each operation uses a properly pooled connection.
+  An initialised `DatabaseClient` instance. `DataExtractor` stores it as `self.db` and calls `self.db.get_oltp_connection()` for every extraction, ensuring each operation uses a properly pooled connection from the shared SQLAlchemy pool.
 </ParamField>
 
 ---
@@ -30,7 +30,7 @@ extractor = DataExtractor(db)
 
 Builds and executes a `SELECT` statement against a named OLTP table. Column selection and row count are both optional. Use this method when you know the table name and want to pull data with minimal SQL authoring.
 
-```
+```sql
 SELECT TOP {limit} {cols} FROM {table_name}
 SELECT {cols} FROM {table_name}          -- when limit is None
 ```
@@ -85,7 +85,7 @@ print(df.shape)   # (100, 3)
 
 Executes an arbitrary SQL string against the OLTP database. When a `limit` is supplied the original query is wrapped inside a subquery so `TOP` can be applied without modifying the caller's SQL.
 
-```
+```sql
 -- With limit:
 SELECT TOP {limit} * FROM ({sql_query}) AS _preview
 
@@ -145,7 +145,9 @@ print(df.shape)   # (50, 3)
 
 Scans the OLTP database catalogue and returns every user-accessible table as a schema-qualified string (`"schema.table"`). System schemas are filtered out so only application data surfaces.
 
-**Excluded system schemas:**
+The filter applies `schema.lower() in system_schemas` — each discovered schema name is lowercased before checking against the exclusion set. The exclusion set is defined exactly as follows in source:
+
+**Excluded system schemas (exact set):**
 
 | Schema | Schema | Schema |
 |---|---|---|
@@ -153,6 +155,10 @@ Scans the OLTP database catalogue and returns every user-accessible table as a s
 | `db_owner` | `db_accessadmin` | `db_securityadmin` |
 | `db_ddladmin` | `db_backupoperator` | `db_datareader` |
 | `db_datawriter` | `db_denydatareader` | `db_denydatawriter` |
+
+<Note>
+  The filter calls `schema.lower()` before testing set membership. Because the exclusion set stores `"INFORMATION_SCHEMA"` in uppercase and the comparison uses a lowercased schema name, the effective matching is case-insensitive only for the all-lowercase entries in the set (e.g., `"sys"`, `"guest"`, `"db_owner"`, etc.). Schemas whose names vary in case beyond these entries will be passed through to the table list.
+</Note>
 
 <ResponseField name="return" type="list[str]">
   A list of schema-qualified table names in `"schema.table"` format. The list is built by iterating over every non-system schema returned by `Inspector.get_schema_names()` and concatenating each schema name with its child table names.

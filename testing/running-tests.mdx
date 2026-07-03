@@ -1,5 +1,5 @@
 ---
-title: "Running the ETL Dinámico Test Suite with Pytest"
+title: "How to Run the ETL Dinámico Test Suite with Pytest"
 sidebarTitle: "Running Tests"
 description: "Run ETL Dinámico's pytest suite to verify connection health, transformer logic, incremental loader filtering, and full pipeline orchestration."
 ---
@@ -72,7 +72,7 @@ pytest --version
     **`test_transformaciones_pandas()`** — Pure unit test; no database required. Exercises `capitalize_transform` (uppercase), `concat_transform` (column concatenation), and `date_transform` (year extraction) on a small in-memory DataFrame.
   </Card>
   <Card title="test_loader.py" icon="filter">
-    **`test_carga_incremental_filtra_correctamente()`** — Mocks the database client and patches `pd.read_sql` to simulate an existing DW row (`CustomerID=10`). Asserts that `to_sql` is called exactly once, proving the already-loaded row is filtered out and only `CustomerID=20` is inserted.
+    **`test_carga_incremental_filtra_correctamente()`** — Mocks the database client and patches `pd.read_sql` to simulate an existing DW row (`CustomerID=10`). Asserts that `to_sql` is called exactly once, confirming the incremental load path was executed.
   </Card>
   <Card title="test_pipelines.py" icon="sitemap">
     **`test_flujo_completo_con_datos_reales()`** — Mocks the extractor and loader, then drives a full `ETLPipeline.run_dynamic_etl()` call with three territory rows and an `upper` column mapping. Verifies `status`, `rows_extracted`, and that the `New_Name` column contains correctly uppercased values.

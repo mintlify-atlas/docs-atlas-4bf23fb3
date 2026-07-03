@@ -43,7 +43,7 @@ run_dynamic_etl(
 </ParamField>
 
 <ParamField path="target_table" type="str" required>
-  Name of the destination table in the OLAP Data Warehouse (e.g., `"DimCustomers"`). Must already exist in the DW — the loader appends to it and will not create it.
+  Name of the destination table in the OLAP Data Warehouse (e.g., `"DimCustomers"`). The loader uses `if_exists='append'`: it appends rows to an existing table and creates the table automatically on the first run if it does not yet exist. For production use, pre-create the table with explicit column types and primary key constraints.
 </ParamField>
 
 <ParamField path="business_key" type="str" required>
@@ -55,7 +55,7 @@ run_dynamic_etl(
 </ParamField>
 
 <ParamField path="sql_query" type="str | None">
-  An optional custom SQL query string. When provided, this overrides `source_table` extraction — `DataExtractor.extract_by_query()` is called instead of `extract_by_table()`. Defaults to `None`.
+  An optional custom SQL query string. When provided, `DataExtractor.extract_by_query()` is called and its result becomes the working DataFrame. The pipeline evaluates `source_table` and `sql_query` independently — if both are non-empty, both execute and the query result overwrites the table result. Pass `source_table=""` to use only the query path. Defaults to `None`.
 </ParamField>
 
 ---

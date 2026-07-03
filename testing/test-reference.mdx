@@ -1,7 +1,7 @@
 ---
-title: "Test Reference: All Test Cases in ETL Dinámico"
+title: "ETL Dinámico: Test Reference for All Four Test Cases"
 sidebarTitle: "Test Reference"
-description: "Complete reference for all test cases in ETL Dinámico's pytest suite, covering what each test asserts and how mocking is used for database-independent testing."
+description: "Complete reference for all four ETL Dinámico pytest tests — what each one asserts, which dependencies it needs, and how mocking eliminates database I/O."
 ---
 
 ETL Dinámico's test suite is organized into four files — one per architectural layer. This reference documents every test function: what it exercises, what external dependencies it requires, which objects are mocked, and exactly what assertions it makes. Use this page as a map when a test fails and you need to understand what the failure is telling you about a specific component.
@@ -142,7 +142,7 @@ This module tests the incremental-load logic inside `DataLoader`. The core behav
 
 <CardGroup cols={2}>
   <Card title="What it tests" icon="filter">
-    The incremental loader correctly identifies rows already present in the DW by their business key and excludes them from the insert, calling `to_sql` exactly once with only the new rows.
+    The incremental loader correctly identifies rows already present in the DW by their business key, excludes them from the insert, and calls `to_sql` exactly once.
   </Card>
   <Card title="Mocking strategy" icon="masks-theater">
     `DatabaseClient` replaced by `MagicMock`, `pd.read_sql` patched to return a simulated existing-DW DataFrame, `DataFrame.to_sql` patched to capture the call without touching any database.
@@ -169,7 +169,7 @@ This module tests the incremental-load logic inside `DataLoader`. The core behav
 The DW already contains `CustomerID=10`. The loader must detect this, drop the first row, and insert only `CustomerID=20`.
 
 **Assertion:**
-- `mock_to_sql.assert_called_once()` — `to_sql` was invoked exactly one time, confirming the filtered (single-row) DataFrame was passed to the insert operation.
+- `mock_to_sql.assert_called_once()` — `to_sql` was invoked exactly one time, confirming the incremental load path executed a single insert call.
 
 ```python
 from unittest.mock import MagicMock, patch

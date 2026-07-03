@@ -1,5 +1,5 @@
 ---
-title: "Understanding Incremental Load Behavior in the UI"
+title: "How ETL Dinámico's Incremental Load Prevents Duplicates"
 sidebarTitle: "Incremental Load"
 description: "Learn how ETL Dinámico prevents duplicate records by filtering out rows whose business key already exists in the Data Warehouse before each load."
 ---
@@ -50,7 +50,7 @@ The **business key** is the single column that uniquely identifies a record in b
   </Card>
 </CardGroup>
 
-You select the business key in the **Configuración de carga** section of the dashboard, beneath the column mapping grid. The selected column must also appear as a mapped `target_column` in at least one regular mapping — the validator enforces this before the pipeline runs.
+You select the business key in the **Configuración de carga** section of the dashboard, beneath the column mapping grid. The selected column must also appear as `target_column` in at least one entry in `column_mappings` (regular or concat) — the validator enforces this before the pipeline runs.
 
 ---
 
@@ -77,7 +77,7 @@ The difference between `rows_extracted` and `rows_loaded` is the number of recor
   <Step title="First run — all records are new">
     The DW table is empty (or the business key column has no matching values). `load_incremental()` finds no existing keys, so the filter passes every incoming row.
 
-    ```
+    ```text
     rows_extracted = 847
     rows_loaded    = 847
     ```
@@ -87,7 +87,7 @@ The difference between `rows_extracted` and `rows_loaded` is the number of recor
   <Step title="Repeat run — no new data in OLTP">
     You run the same pipeline again without any changes to the source table. Every business key from the OLTP now exists in the DW, so `~isin()` eliminates all rows.
 
-    ```
+    ```text
     rows_extracted = 847
     rows_loaded    =   0
     ```
@@ -97,7 +97,7 @@ The difference between `rows_extracted` and `rows_loaded` is the number of recor
   <Step title="Subsequent run — new records added to OLTP">
     Since the last run, 15 new customers were added to the OLTP. The OLTP now has 862 rows. Of those, 847 keys already exist in the DW.
 
-    ```
+    ```text
     rows_extracted = 862
     rows_loaded    =  15
     ```
@@ -129,8 +129,11 @@ The difference between `rows_extracted` and `rows_loaded` is the number of recor
 The incremental load is the final step of the four-stage pipeline executed by `ETLPipeline.run_dynamic_etl()`:
 
 ```python
-# 1. EXTRACT — pull rows from OLTP
-df = self.extractor.extract_by_table(source_table, columns=columns_to_extract)
+# 1. EXTRACT — pull rows from OLTP (table mode or SQL mode)
+if source_table:
+    df = self.extractor.extract_by_table(source_table, columns=columns_to_extract)
+if sql_query:
+    df = self.extractor.extract_by_query(sql_query)
 
 # 2. TRANSFORM — apply mappings and transformations
 for mapping in column_mappings:

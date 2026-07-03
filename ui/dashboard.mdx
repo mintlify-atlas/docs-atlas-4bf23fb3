@@ -1,5 +1,5 @@
 ---
-title: "Using the ETL Dinámico Streamlit Dashboard"
+title: "Using the ETL Dinámico Dashboard to Run Pipelines"
 sidebarTitle: "Dashboard"
 description: "The Streamlit dashboard provides an interactive no-code interface to configure and run ETL pipelines from SQL Server OLTP to your Data Warehouse."
 ---
@@ -16,7 +16,7 @@ streamlit run app.py
 
 Streamlit will compile the app and open it automatically in your default browser at:
 
-```
+```text
 http://localhost:8501
 ```
 
@@ -32,7 +32,7 @@ Keep the terminal open for the duration of your session — closing it stops the
 
 The dashboard is divided into two top-level columns that sit side by side, followed by a shared mapping section and the execution controls below them.
 
-```
+```text
 ┌─────────────────────────┬─────────────────────────────┐
 │     Origen de datos     │     Destino en el DW        │
 │  (Data Source — left)   │  (DW Destination — right)   │
@@ -53,13 +53,13 @@ Select this mode to browse the non-system tables that are already present in the
 
 <Steps>
   <Step title="Select a table">
-    A dropdown lists every schema-qualified table returned by `extract_tables()`. System schemas (`sys`, `INFORMATION_SCHEMA`, `guest`, and all `db_*` role schemas) are automatically excluded. Each entry is formatted as `schema.TableName` — for example, `Sales.Customer`.
+    A dropdown lists every schema-qualified table returned by `extract_tables()`. System schemas are automatically excluded — specifically `sys`, `INFORMATION_SCHEMA`, `guest`, and the built-in database-role schemas (`db_owner`, `db_accessadmin`, `db_securityadmin`, `db_ddladmin`, `db_backupoperator`, `db_datareader`, `db_datawriter`, `db_denydatareader`, `db_denydatawriter`). The comparison is case-insensitive. Each entry is formatted as `schema.TableName` — for example, `Sales.Customer`.
   </Step>
   <Step title="Choose columns to extract">
     After selecting a table, a multiselect widget appears pre-populated with **all** columns. Each option is labelled with both the column name and its SQL type — for example, `CustomerID  (INTEGER)`. Deselect any columns you do not need before building your mappings.
   </Step>
   <Step title="Preview source data">
-    Click **Vista previa** to load the first 10 rows of the selected table with the chosen columns. The result is cached in `st.session_state` so it persists across re-renders without hitting the database again. An expandable panel below the preview also lists every column name and its SQL type for reference.
+    Click **Vista previa** to load the first 10 rows of the selected table with the chosen columns using `extract_by_table(source_table, columns=..., limit=10)`. The result is stored in `st.session_state.preview_df` so it survives re-renders triggered by other widget interactions — but each click of the button always issues a fresh database query and overwrites the cached frame. A collapsed expander below the preview lists every column name and its SQL type for reference.
   </Step>
 </Steps>
 
@@ -91,13 +91,13 @@ The right column, labelled **Destino en el DW**, is where you choose the target 
     A dropdown lists all tables returned by `DatabaseClient.get_olap_tables()`, which uses SQLAlchemy's `inspect()` against the OLAP engine. Select the dimension or fact table you want to load data into.
   </Step>
   <Step title="Inspect destination columns">
-    Once a table is selected, an expandable panel (expanded by default) renders every column in that table as a bullet with its name and SQL type:
+    Once a table is selected, an expandable panel (expanded by default) renders every column in that table as a markdown list item with the column name in bold and its SQL type in backtick code style:
 
-    ```
-    • CustomerKey  (INTEGER)
-    • CustomerName  (NVARCHAR(100))
-    • TerritoryKey  (INTEGER)
-    • ModifiedDate  (DATETIME)
+    ```text
+    - **CustomerKey** `INTEGER`
+    - **CustomerName** `NVARCHAR(100)`
+    - **TerritoryKey** `INTEGER`
+    - **ModifiedDate** `DATETIME`
     ```
 
     Use this panel to confirm column names and types before building your mappings.
@@ -140,8 +140,8 @@ If any required field is missing or misconfigured, one or more inline error mess
 | No column mappings configured | `Debes configurar al menos un mapeo de columna.` |
 | Business key not present in mapped target columns | `La llave de negocio '{key}' debe estar mapeada desde una columna origen.` |
 | A concat mapping is missing `column1` or `column2` | `Cada concatenación debe tener dos columnas origen.` |
-| A regular mapping is missing `source_column` | `Cada mapeo debe tener una columna origen.` |
-| A mapping is missing `target_column` | `Cada mapeo debe tener una columna destino.` |
+| A non-concat mapping is missing `source_column` | `Cada mapeo debe tener una columna origen.` |
+| Any mapping (concat or non-concat) is missing `target_column` | `Cada mapeo debe tener una columna destino.` |
 
 ---
 
@@ -173,6 +173,6 @@ Below the metrics:
 }
 ```
 
-- **Vista previa de datos cargados** — a 5-row `st.dataframe` rendering of the first rows of the DataFrame that was written to the DW, so you can verify column names and values without querying the database manually.
+- **Vista previa de datos cargados** — a subheading followed by a `st.dataframe` rendering of `sample_data`, which is the first 5 rows of the fully-transformed DataFrame that was submitted to the loader. This lets you verify column names and values without querying the DW manually. Note that this sample is taken from the complete transformed set before the incremental filter, so it may include rows that were not inserted because their business key already existed in the DW.
 
 If an unhandled exception occurs during execution, a red `st.error` banner appears with the exception message and the run is aborted — no partial data is committed.

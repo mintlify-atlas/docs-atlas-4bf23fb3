@@ -26,7 +26,6 @@ After cloning you will see the following top-level structure:
 ```
 proyecto_dw/
 ├── app.py              # Streamlit entry point
-├── main.py             # Programmatic entry point
 ├── requirements.txt    # Python dependencies
 ├── src/
 │   ├── config/
@@ -137,7 +136,7 @@ From the UI you can:
 
 1. **Select a source table** from the OLTP database (or write a custom SQL query).
 2. **Choose columns** to extract and preview up to 10 rows before committing.
-3. **Configure column mappings** — assign each source column a transformation type (`none`, `upper`, `lower`, `year`, `month`, `day`) and map it to a column in the destination table.
+3. **Configure column mappings** — assign each source column a transformation type (Ninguna, Upper, Lower, Año, Mes, Día) and map it to a column in the destination table.
 4. **Add concatenation mappings** to combine two source columns (e.g., `FirstName` + `LastName` → `FullName`).
 5. **Set the business key** used for incremental loading.
 6. **Click "Ejecutar ETL"** to run the pipeline and view row counts, a JSON result summary, and a data preview.
