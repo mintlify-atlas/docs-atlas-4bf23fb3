@@ -1,0 +1,201 @@
+---
+title: "Configure SQL Server Connections for ETL Dinámico"
+sidebarTitle: "Configuration"
+description: "Set up OLTP source and OLAP destination connection strings using environment variables. ETL Dinámico uses ODBC Driver 17 and Windows Authentication."
+---
+
+ETL Dinámico reads all database connection parameters from a `.env` file at the project root. The `Settings` class in `src/config/settings.py` loads those variables at import time using `python-dotenv`, assembles raw ODBC connection strings, and encodes them into fully qualified SQLAlchemy URLs. No connection details live anywhere else in the codebase — every layer that needs a database connection receives it through `DatabaseClient`, which is itself initialized from the two URLs that `Settings` produces.
+
+## How the `.env` File Works
+
+When any module imports from `src.config.settings`, Python executes `load_dotenv()`, which reads the `.env` file from the current working directory and injects each `KEY=VALUE` pair into `os.environ`. The `Settings` class then calls `os.getenv()` for each of the six variables and uses Python f-strings to compose two ODBC connection strings — one for the OLTP source and one for the OLAP destination.
+
+Those raw ODBC strings look like this before encoding:
+
+```
+DRIVER=ODBC Driver 17 for SQL Server;SERVER=ELIEL\SQLEXPRESS;DATABASE=NORTHWND;Trusted_Connection=yes;TrustServerCertificate=yes;
+```
+
+Because SQLAlchemy's `create_engine()` expects a URL and not a raw ODBC string, `Settings` wraps each string with the `mssql+pyodbc:///?odbc_connect=` scheme and uses `urllib.parse.quote_plus()` to percent-encode every special character — including the backslash in named instance server names such as `ELIEL\SQLEXPRESS`.
+
+## Environment Variables
+
+The six variables below are the complete configuration surface for ETL Dinámico. All six are required; if any are missing, the corresponding connection string will contain a `None` literal and the `create_engine()` call will fail at connection time.
+
+### OLTP Source Variables
+
+<ParamField path="OLTP_SERVER" type="string" required>
+  The hostname, IP address, or `host\instance` name of the SQL Server instance that hosts your source (OLTP) database. For a named instance such as SQL Server Express, use the backslash-separated form: `ELIEL\SQLEXPRESS`. ETL Dinámico encodes the backslash automatically — do not percent-encode it manually.
+
+  ```ini
+  OLTP_SERVER=ELIEL\SQLEXPRESS
+  ```
+</ParamField>
+
+<ParamField path="OLTP_DATABASE" type="string" required>
+  The name of the source database on the OLTP server. This is the operational/transactional database from which rows will be extracted. The database must already exist; ETL Dinámico does not create databases.
+
+  ```ini
+  OLTP_DATABASE=NORTHWND
+  ```
+</ParamField>
+
+<ParamField path="OLTP_DRIVER" type="string" required>
+  The exact name of the ODBC driver as registered on the host machine. ETL Dinámico requires **ODBC Driver 17 for SQL Server**. The value must match the driver name exactly as it appears in the ODBC Data Source Administrator (Windows) or `odbcinst.ini` (Linux/macOS).
+
+  ```ini
+  OLTP_DRIVER=ODBC Driver 17 for SQL Server
+  ```
+</ParamField>
+
+### OLAP Destination Variables
+
+<ParamField path="OLAP_SERVER" type="string" required>
+  The hostname, IP address, or `host\instance` name of the SQL Server instance that hosts your destination (OLAP / Data Warehouse) database. This can be the same value as `OLTP_SERVER` if both databases reside on the same instance.
+
+  ```ini
+  OLAP_SERVER=ELIEL\SQLEXPRESS
+  ```
+</ParamField>
+
+<ParamField path="OLAP_DATABASE" type="string" required>
+  The name of the destination database on the OLAP server. This is your Data Warehouse, which must already contain the target dimension and fact tables. ETL Dinámico appends rows into existing tables using `DataFrame.to_sql` with `if_exists='append'`.
+
+  ```ini
+  OLAP_DATABASE=DW_NORTHWIND
+  ```
+</ParamField>
+
+<ParamField path="OLAP_DRIVER" type="string" required>
+  The exact ODBC driver name for the OLAP destination connection. In almost all cases this will be the same value as `OLTP_DRIVER`. Both connections are independent, so they can technically use different driver versions if needed.
+
+  ```ini
+  OLAP_DRIVER=ODBC Driver 17 for SQL Server
+  ```
+</ParamField>
+
+## How `Settings` Builds SQLAlchemy URLs
+
+The `Settings` class source code in `src/config/settings.py` shows the full URL construction process:
+
+```python
+import os
+import urllib
+from dotenv import load_dotenv
+
+load_dotenv()
+
+class Settings:
+    raw_oltp = (
+        f"DRIVER={os.getenv('OLTP_DRIVER')};"
+        f"SERVER={os.getenv('OLTP_SERVER')};"
+        f"DATABASE={os.getenv('OLTP_DATABASE')};"
+        f"Trusted_Connection=yes;"
+        f"TrustServerCertificate=yes;"
+    )
+
+    raw_olap = (
+        f"DRIVER={os.getenv('OLAP_DRIVER')};"
+        f"SERVER={os.getenv('OLAP_SERVER')};"
+        f"DATABASE={os.getenv('OLAP_DATABASE')};"
+        f"Trusted_Connection=yes;"
+        f"TrustServerCertificate=yes;"
+    )
+
+    # quote_plus encodes backslashes (\) and spaces as URL-safe percent-sequences
+    OLTP_URL = f"mssql+pyodbc:///?odbc_connect={urllib.parse.quote_plus(raw_oltp)}"
+    OLAP_URL = f"mssql+pyodbc:///?odbc_connect={urllib.parse.quote_plus(raw_olap)}"
+
+settings = Settings()
+```
+
+Two important connection parameters are always injected regardless of what is in the `.env` file:
+
+- **`Trusted_Connection=yes`** — instructs the ODBC driver to authenticate using the Windows identity of the process running ETL Dinámico. No SQL Server username or password is required.
+- **`TrustServerCertificate=yes`** — bypasses SSL certificate validation for the server's TLS certificate. This is safe for local development and internal network environments but should be evaluated against your organization's security policy for production deployments.
+
+<Note>
+Windows Authentication (`Trusted_Connection=yes`) means the SQL Server login used is the Windows user account running the Python process. Ensure that account has at minimum `db_datareader` on the OLTP database and `db_datawriter` + `db_ddladmin` (or equivalent) on the OLAP database, since `DataFrame.to_sql` may need to create tables.
+</Note>
+
+### The Final URL Format
+
+After `urllib.parse.quote_plus()` encodes the raw ODBC string, the final URL passed to `create_engine()` has this structure:
+
+```
+mssql+pyodbc:///?odbc_connect=<encoded_odbc_string>
+```
+
+For the Northwind example, the encoded OLTP URL would look like:
+
+```
+mssql+pyodbc:///?odbc_connect=DRIVER%3DODBC+Driver+17+for+SQL+Server%3BSERVER%3DELIEL%5CSQLEXPRESS%3BDATABASE%3DNORTHWND%3BTrusted_Connection%3Dyes%3BTrustServerCertificate%3Dyes%3B
+```
+
+You never need to construct or inspect this URL manually — `Settings` handles it entirely.
+
+<Warning>
+Never hardcode server names, database names, or driver names directly in Python source files. Always use the `.env` file. The `.env` file should be added to `.gitignore` to prevent connection details from being committed to version control.
+</Warning>
+
+## Example: Same Server for OLTP and OLAP
+
+This is the most common configuration for local development, where a single SQL Server Express instance hosts both the source database and the Data Warehouse.
+
+```ini
+# Both databases on the same local SQL Server Express instance
+OLTP_SERVER=ELIEL\SQLEXPRESS
+OLTP_DATABASE=NORTHWND
+OLTP_DRIVER=ODBC Driver 17 for SQL Server
+
+OLAP_SERVER=ELIEL\SQLEXPRESS
+OLAP_DATABASE=DW_NORTHWIND
+OLAP_DRIVER=ODBC Driver 17 for SQL Server
+```
+
+Since `OLTP_SERVER` and `OLAP_SERVER` share the same value, `DatabaseClient` will create two separate SQLAlchemy engines pointing at the same SQL Server instance but different databases. SQLAlchemy manages each engine's connection pool independently.
+
+## Example: Separate Servers for OLTP and OLAP
+
+In a production environment it is common for the operational database and the Data Warehouse to live on separate SQL Server hosts. Simply provide distinct server names for the two groups of variables:
+
+```ini
+# OLTP source on the production application server
+OLTP_SERVER=prod-app-server\MSSQLSERVER
+OLTP_DATABASE=SalesDB
+OLTP_DRIVER=ODBC Driver 17 for SQL Server
+
+# OLAP destination on the dedicated Data Warehouse server
+OLAP_SERVER=dw-server.internal.company.com
+OLAP_DATABASE=DW_Sales
+OLAP_DRIVER=ODBC Driver 17 for SQL Server
+```
+
+<Tip>
+If the OLAP server is a default (unnamed) SQL Server instance, omit the backslash and instance name and use only the hostname or IP: `OLAP_SERVER=dw-server.internal.company.com`. Named instances always require the `host\instance` form.
+</Tip>
+
+## Backslashes in Server Names
+
+SQL Server named instances use a backslash in their address — for example, `ELIEL\SQLEXPRESS`. Backslashes are not valid unescaped characters in URL strings, which is why `Settings` runs every raw ODBC string through `urllib.parse.quote_plus()` before passing it to `create_engine()`.
+
+<Warning>
+Write server names with a **single backslash** in your `.env` file: `OLTP_SERVER=ELIEL\SQLEXPRESS`. Do not double the backslash (`ELIEL\\SQLEXPRESS`) and do not use a forward slash. The `python-dotenv` loader reads `.env` values as plain strings, and `Settings` handles the URL encoding automatically. Writing a double backslash will result in the literal string `ELIEL\\SQLEXPRESS` being sent to SQL Server, which will cause a connection error.
+</Warning>
+
+The encoding performed by `quote_plus` converts `\` to `%5C` in the final URL, which the ODBC driver correctly interprets as a path separator between the host and the instance name.
+
+## Verifying Your Configuration
+
+After creating your `.env` file you can quickly validate that both connections resolve correctly by running a short Python script from the project root:
+
+```python
+from src.infrastructure.db_client import DatabaseClient
+
+db = DatabaseClient()
+
+print("OLTP tables:", db.get_oltp_tables())
+print("OLAP tables:", db.get_olap_tables())
+```
+
+If both lists are returned without exceptions, your `.env` configuration is correct and the ODBC driver is communicating successfully with SQL Server. If you see a `pyodbc.OperationalError`, double-check the server name, database name, driver name, and that the Windows account running Python has been granted access to both databases.

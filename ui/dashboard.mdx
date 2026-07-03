@@ -1,0 +1,178 @@
+---
+title: "Using the ETL Dinámico Streamlit Dashboard"
+sidebarTitle: "Dashboard"
+description: "The Streamlit dashboard provides an interactive no-code interface to configure and run ETL pipelines from SQL Server OLTP to your Data Warehouse."
+---
+
+The ETL Dinámico dashboard is a browser-based interface built with Streamlit that lets you configure and execute full ETL pipelines without writing a single line of Python. You choose a source table or write a custom SQL query, map its columns to a destination Data Warehouse table, apply optional transformations, and fire the pipeline — all from one screen. Every result is displayed inline with row counts, a JSON detail panel, and a live sample of the loaded data.
+
+## Starting the Dashboard
+
+Launch the app from the root of the project with a single command:
+
+```bash
+streamlit run app.py
+```
+
+Streamlit will compile the app and open it automatically in your default browser at:
+
+```
+http://localhost:8501
+```
+
+Keep the terminal open for the duration of your session — closing it stops the server.
+
+<Note>
+  `init_etl()` is decorated with `@st.cache_resource`, which means `DatabaseClient` and `ETLPipeline` are instantiated **once per server session** and reused across every interaction. If you update connection strings in your `.env` file, you must restart the Streamlit process for the new values to take effect — a page refresh alone is not enough.
+</Note>
+
+---
+
+## Dashboard Layout
+
+The dashboard is divided into two top-level columns that sit side by side, followed by a shared mapping section and the execution controls below them.
+
+```
+┌─────────────────────────┬─────────────────────────────┐
+│     Origen de datos     │     Destino en el DW        │
+│  (Data Source — left)   │  (DW Destination — right)   │
+└─────────────────────────┴─────────────────────────────┘
+          ↓ Mapeo de columnas y transformaciones ↓
+                    [ Ejecutar ETL ]
+```
+
+---
+
+## Data Source (Left Column)
+
+The left column, labelled **Origen de datos**, is where you tell the pipeline what data to pull from the OLTP database. Two modes are available, selected via a horizontal radio button.
+
+### Mode 1 — Tabla existente (OLTP)
+
+Select this mode to browse the non-system tables that are already present in the OLTP database.
+
+<Steps>
+  <Step title="Select a table">
+    A dropdown lists every schema-qualified table returned by `extract_tables()`. System schemas (`sys`, `INFORMATION_SCHEMA`, `guest`, and all `db_*` role schemas) are automatically excluded. Each entry is formatted as `schema.TableName` — for example, `Sales.Customer`.
+  </Step>
+  <Step title="Choose columns to extract">
+    After selecting a table, a multiselect widget appears pre-populated with **all** columns. Each option is labelled with both the column name and its SQL type — for example, `CustomerID  (INTEGER)`. Deselect any columns you do not need before building your mappings.
+  </Step>
+  <Step title="Preview source data">
+    Click **Vista previa** to load the first 10 rows of the selected table with the chosen columns. The result is cached in `st.session_state` so it persists across re-renders without hitting the database again. An expandable panel below the preview also lists every column name and its SQL type for reference.
+  </Step>
+</Steps>
+
+### Mode 2 — SQL personalizado
+
+Select this mode to supply an arbitrary SQL query instead of selecting a table.
+
+<Steps>
+  <Step title="Write your query">
+    A text area with a placeholder of `SELECT * FROM .. WHERE ..` accepts any valid T-SQL statement targeted at the OLTP database.
+  </Step>
+  <Step title="Execute and preview">
+    Click **Ejecutar consulta** to run the query. The pipeline wraps it as a subquery and fetches a `TOP 50` preview via `extract_by_query(sql_query, limit=50)`. The resulting DataFrame is displayed inline and its column names are automatically forwarded to the mapping section below.
+  </Step>
+</Steps>
+
+<Note>
+  When you edit the SQL text area, the previously cached query result is cleared automatically so the mapping section always reflects the current query.
+</Note>
+
+---
+
+## Data Warehouse Destination (Right Column)
+
+The right column, labelled **Destino en el DW**, is where you choose the target table in the Data Warehouse.
+
+<Steps>
+  <Step title="Select a destination table">
+    A dropdown lists all tables returned by `DatabaseClient.get_olap_tables()`, which uses SQLAlchemy's `inspect()` against the OLAP engine. Select the dimension or fact table you want to load data into.
+  </Step>
+  <Step title="Inspect destination columns">
+    Once a table is selected, an expandable panel (expanded by default) renders every column in that table as a bullet with its name and SQL type:
+
+    ```
+    • CustomerKey  (INTEGER)
+    • CustomerName  (NVARCHAR(100))
+    • TerritoryKey  (INTEGER)
+    • ModifiedDate  (DATETIME)
+    ```
+
+    Use this panel to confirm column names and types before building your mappings.
+  </Step>
+</Steps>
+
+---
+
+## Column Mapping and Transformation Section
+
+Below both columns, a horizontal divider separates the **Mapeo de columnas y transformaciones** section. This section is only rendered when at least one source column and at least one destination column are both available. For full details on how to configure mappings, transformations, concatenations, and the business key, see [Column Mapping](/ui/column-mapping).
+
+---
+
+## Running the ETL Pipeline
+
+At the bottom of the mapping section, the **Ejecutar ETL** button (rendered as a full-width primary button) is the single trigger for the entire pipeline run.
+
+```python
+st.button(
+    "Ejecutar ETL",
+    type="primary",
+    use_container_width=True,
+    on_click=_validar_y_ejecutar,
+    args=(pipeline, source_table, sql_query, target_table, business_key, all_mappings),
+)
+```
+
+Clicking the button calls `_validar_y_ejecutar()`, which first runs a set of validation checks and, if all pass, invokes `pipeline.run_dynamic_etl()` inside a spinner.
+
+### Validation Errors
+
+If any required field is missing or misconfigured, one or more inline error messages appear **before** the pipeline is executed — nothing is written to the database. The possible validation errors are:
+
+| Condition | Error message |
+|---|---|
+| No source table selected and no SQL written | `Debes seleccionar una tabla o escribir una consulta SQL.` |
+| No destination table selected | `Debes especificar la tabla destino.` |
+| No business key selected | `Debes seleccionar la llave de negocio.` |
+| No column mappings configured | `Debes configurar al menos un mapeo de columna.` |
+| Business key not present in mapped target columns | `La llave de negocio '{key}' debe estar mapeada desde una columna origen.` |
+| A concat mapping is missing `column1` or `column2` | `Cada concatenación debe tener dos columnas origen.` |
+| A regular mapping is missing `source_column` | `Cada mapeo debe tener una columna origen.` |
+| A mapping is missing `target_column` | `Cada mapeo debe tener una columna destino.` |
+
+---
+
+## ETL Results
+
+When the pipeline completes successfully, the dashboard replaces the spinner with a structured results block.
+
+<CardGroup cols={2}>
+  <Card title="Filas extraídas" icon="database">
+    Total rows read from the OLTP source — either the full table or the SQL query result — before any filtering or deduplication.
+  </Card>
+  <Card title="Filas cargadas" icon="arrow-up-to-line">
+    Rows actually inserted into the Data Warehouse after the incremental filter removed records whose business key already existed in the destination table.
+  </Card>
+</CardGroup>
+
+Below the metrics:
+
+- **Tabla destino** — the name of the DW table that was written to, displayed as inline code.
+- **Ver detalle completo de la respuesta** — an expandable panel showing the full JSON result object returned by `run_dynamic_etl()`:
+
+```json
+{
+  "status": "success",
+  "rows_extracted": 847,
+  "rows_loaded": 12,
+  "table_destination": "dbo.DimCustomer",
+  "sample_data": "..."
+}
+```
+
+- **Vista previa de datos cargados** — a 5-row `st.dataframe` rendering of the first rows of the DataFrame that was written to the DW, so you can verify column names and values without querying the database manually.
+
+If an unhandled exception occurs during execution, a red `st.error` banner appears with the exception message and the run is aborted — no partial data is committed.

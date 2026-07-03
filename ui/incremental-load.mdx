@@ -1,0 +1,146 @@
+---
+title: "Understanding Incremental Load Behavior in the UI"
+sidebarTitle: "Incremental Load"
+description: "Learn how ETL Dinámico prevents duplicate records by filtering out rows whose business key already exists in the Data Warehouse before each load."
+---
+
+ETL Dinámico uses an incremental loading strategy, which means you can run the same pipeline multiple times without worrying about inserting duplicate records into your Data Warehouse. Each run automatically compares the incoming data against what already exists in the destination table and inserts **only the rows that are genuinely new**. Understanding this behavior helps you interpret the result metrics correctly and avoid common pitfalls when loading dimensions and facts.
+
+---
+
+## What Is Incremental Loading?
+
+Traditional bulk loads truncate the destination table and reload everything from scratch on every run. Incremental loading is different: it keeps existing records intact and appends only the delta — the rows whose identifier has not been seen before.
+
+In ETL Dinámico, the incremental strategy is implemented by `DataLoader.load_incremental()`:
+
+```python
+def load_incremental(self, df_transformer, table_name: str, business_key: str) -> int:
+    query = f"SELECT {business_key} from {table_name}"
+
+    with self.db_client.get_olap_connection() as conn:
+        df_dw = pd.read_sql(text(query), conn)
+        valid_keys = df_dw[business_key].tolist()
+
+        df_load = df_transformer[~df_transformer[business_key].isin(valid_keys)]
+
+        df_load.to_sql(table_name, conn, if_exists='append', index=False)
+        conn.commit()
+        return len(df_load)
+```
+
+The method reads all current values of the business key column from the DW table, filters them out of the incoming DataFrame using a `~isin()` mask, and appends only the surviving rows with `to_sql(..., if_exists='append')`.
+
+---
+
+## The Business Key
+
+The **business key** is the single column that uniquely identifies a record in both the source data and the Data Warehouse table. It is the bridge the incremental loader uses to decide whether a row is new or already present.
+
+<CardGroup cols={2}>
+  <Card title="Good business key choices" icon="check">
+    - Primary key of the OLTP table (e.g., `CustomerID`, `SalesOrderID`)
+    - Natural key of the dimension (e.g., `TerritoryID`, `ProductCode`)
+    - Surrogate key already generated in the OLAP schema
+  </Card>
+  <Card title="Poor business key choices" icon="xmark">
+    - Columns with nullable values (NULLs are always treated as new)
+    - Non-unique columns (e.g., names, descriptions)
+    - Composite keys — only a single column is supported per run
+  </Card>
+</CardGroup>
+
+You select the business key in the **Configuración de carga** section of the dashboard, beneath the column mapping grid. The selected column must also appear as a mapped `target_column` in at least one regular mapping — the validator enforces this before the pipeline runs.
+
+---
+
+## Reading the Result Metrics
+
+After a successful run, the dashboard displays two metric cards:
+
+| Metric | Meaning |
+|---|---|
+| **Filas extraídas** (`rows_extracted`) | Total rows read from the OLTP source — the full table or full SQL query result — before any filtering |
+| **Filas cargadas** (`rows_loaded`) | Rows actually inserted into the DW — the count returned by `load_incremental()` after the duplicate filter |
+
+The difference between `rows_extracted` and `rows_loaded` is the number of records that already existed in the DW and were skipped.
+
+<Info>
+  A `rows_loaded` value of **0** while `rows_extracted` is greater than 0 is completely normal on repeat runs when no new data has been added to the source. It does not indicate an error — it means every incoming record was already present in the Data Warehouse.
+</Info>
+
+---
+
+## Common Run Scenarios
+
+<Steps>
+  <Step title="First run — all records are new">
+    The DW table is empty (or the business key column has no matching values). `load_incremental()` finds no existing keys, so the filter passes every incoming row.
+
+    ```
+    rows_extracted = 847
+    rows_loaded    = 847
+    ```
+
+    All 847 rows from the OLTP source are inserted into the DW.
+  </Step>
+  <Step title="Repeat run — no new data in OLTP">
+    You run the same pipeline again without any changes to the source table. Every business key from the OLTP now exists in the DW, so `~isin()` eliminates all rows.
+
+    ```
+    rows_extracted = 847
+    rows_loaded    =   0
+    ```
+
+    Zero rows are inserted. The DW table is unchanged.
+  </Step>
+  <Step title="Subsequent run — new records added to OLTP">
+    Since the last run, 15 new customers were added to the OLTP. The OLTP now has 862 rows. Of those, 847 keys already exist in the DW.
+
+    ```
+    rows_extracted = 862
+    rows_loaded    =  15
+    ```
+
+    Only the 15 new records are inserted — the 847 existing records are untouched.
+  </Step>
+</Steps>
+
+---
+
+## Constraints and Edge Cases
+
+<Warning>
+  If the business key column contains **NULL values** in the source data, those rows will never match an existing key in the DW (SQL NULL is not equal to NULL in a list comparison). Every run will re-insert those null-key rows, causing duplicates. Ensure your business key column is `NOT NULL` before using it for incremental loads.
+</Warning>
+
+<Note>
+  The target table **must already exist** in the Data Warehouse before you run the ETL. `DataLoader` calls `to_sql(..., if_exists='append')`, which appends to an existing table but does **not** create one from scratch. If the table does not exist, SQLAlchemy will raise an error. Create the destination table (with the correct schema) in your DW database before the first run.
+</Note>
+
+<Tip>
+  The business key column must be present in **both** your column mappings and the target DW table. If you forget to include it in the mapping grid — or set it to **— No mapear —** — the validator will catch this before the pipeline starts and display: `La llave de negocio '{key}' debe estar mapeada desde una columna origen.`
+</Tip>
+
+---
+
+## How It Fits Into the Full Pipeline
+
+The incremental load is the final step of the four-stage pipeline executed by `ETLPipeline.run_dynamic_etl()`:
+
+```python
+# 1. EXTRACT — pull rows from OLTP
+df = self.extractor.extract_by_table(source_table, columns=columns_to_extract)
+
+# 2. TRANSFORM — apply mappings and transformations
+for mapping in column_mappings:
+    # upper / lower / year / month / day / none / concat ...
+
+# 3. SELECT — keep only mapped target columns + business key
+df_load = df[target_cols]
+
+# 4. LOAD — insert only rows with unseen business keys
+rows_loaded = self.loader.load_incremental(df_load, table_name=target_table, business_key=business_key)
+```
+
+The `rows_loaded` integer returned by step 4 is what appears in the **Filas cargadas** metric on the dashboard.

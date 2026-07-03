@@ -1,0 +1,165 @@
+---
+title: "Configuring Column Mappings and Transformations"
+sidebarTitle: "Column Mapping"
+description: "Map OLTP source columns to Data Warehouse target columns and apply transformations like uppercase, lowercase, date extraction, and concatenation in the UI."
+---
+
+The column mapping section is the core of the ETL Dinámico interface. It connects every column coming from the OLTP source to a specific column in the Data Warehouse destination, with an optional transformation applied in between. This section appears automatically once you have selected (or queried) a source and chosen a destination table — no configuration file or Python code required.
+
+---
+
+## The Three-Column Mapping Grid
+
+Each source column gets its own row in a three-column grid:
+
+```
+┌──────────────────────┬──────────────────────┬───────────────────────────┐
+│   Columna origen     │   Transformación     │    Columna destino        │
+│  (read-only)         │  (dropdown)          │  (dropdown)               │
+└──────────────────────┴──────────────────────┴───────────────────────────┘
+│  CustomerID          │  Ninguna       ▾     │  CustomerKey  (INTEGER) ▾ │
+│  INTEGER             │                      │                           │
+├──────────────────────┼──────────────────────┼───────────────────────────┤
+│  FirstName           │  Upper         ▾     │  CustomerName (NVARCHAR)▾ │
+│  NVARCHAR(50)        │                      │                           │
+├──────────────────────┼──────────────────────┼───────────────────────────┤
+│  BirthDate           │  Año           ▾     │  BirthYear    (INTEGER) ▾ │
+│  DATETIME            │                      │                           │
+└──────────────────────┴──────────────────────┴───────────────────────────┘
+```
+
+### Column 1 — Source Column (read-only)
+
+The leftmost cell displays the source column's **name** in bold and its **SQL data type** in a code label beneath it. This cell is read-only — it reflects whichever columns you selected in the source panel or the columns returned by your SQL query.
+
+### Column 2 — Transformation
+
+A dropdown that determines what operation is applied to the source column's values before they are written to the destination. The available options map directly to transform types handled by `DataTransformer`:
+
+| UI Label | `transform_type` value | Operation |
+|---|---|---|
+| Ninguna | `none` | Direct copy or rename — `df[target_col] = df[source_col]` |
+| Upper | `upper` | Convert string to upper-case — `.str.upper()` |
+| Lower | `lower` | Convert string to lower-case — `.str.lower()` |
+| Año | `year` | Extract the year from a datetime column — `.dt.year` |
+| Mes | `month` | Extract the month number from a datetime column — `.dt.month` |
+| Día | `day` | Extract the day of the month from a datetime column — `.dt.day` |
+
+<Note>
+  Date transformations (`Año`, `Mes`, `Día`) call `pd.to_datetime()` on the source column before extracting the component, so string-encoded dates in ISO format are handled automatically. Numeric or text columns will raise an error if you attempt a date transform on them.
+</Note>
+
+### Column 3 — Target Column
+
+A dropdown listing every column in the selected DW table, formatted as `ColumnName  (TYPE)`. It also includes a special first option:
+
+- **— No mapear —** — selecting this option excludes the source column from the ETL run entirely. The column will not appear in the DataFrame sent to the loader and will not consume a mapping slot.
+
+Only rows where the target column is **not** `— No mapear —` produce a mapping entry in the final `column_mappings` list that is passed to `pipeline.run_dynamic_etl()`.
+
+---
+
+## Concatenation Mappings
+
+Below the main grid, a separate **Concatenaciones** section lets you combine two source columns into a single target column using a space separator. This is handled by `DataTransformer.concat_transform()`, which produces:
+
+```python
+df[new_column] = df[column1] + ' ' + df[column2]
+```
+
+<Steps>
+  <Step title="Add a concat row">
+    Click **+ Agregar concatenación**. A new row appears with three dropdowns: **Columna 1** and **Columna 2** (both sourced from the available source columns) and **Destino** (sourced from the DW target columns). Clicking the button increments `st.session_state.num_concat` and triggers a `st.rerun()`.
+  </Step>
+  <Step title="Configure the row">
+    Choose the two source columns to combine and the single target column that will receive the concatenated result. For example, `FirstName` + `LastName` → `FullName`.
+  </Step>
+  <Step title="Remove a concat row">
+    Click **- Quitar última concatenación** to remove the most recently added concat row. This decrements `st.session_state.num_concat` and re-renders the form. Only the last row is removed — earlier rows are preserved.
+  </Step>
+</Steps>
+
+Each concat mapping is appended to `all_mappings` as a dict with `"type": "concat"`:
+
+```python
+{
+    "type": "concat",
+    "column1": "FirstName",
+    "column2": "LastName",
+    "target_column": "FullName"
+}
+```
+
+---
+
+## Business Key Selector
+
+Beneath the concatenation controls, a **Configuración de carga** section contains the business key dropdown. This is a required field and must be set before the ETL can run.
+
+The business key is the DW target column used by `DataLoader.load_incremental()` to detect duplicate records. Before inserting any rows, the loader reads all existing values of this column from the DW table and filters them out of the incoming DataFrame — only rows with a key that does not yet exist are inserted.
+
+<Tip>
+  Use the primary key or natural key of the dimension or fact table as your business key. For a customer dimension this is typically `CustomerKey` or `CustomerID`; for a territory dimension it is `TerritoryID`; for a sales fact table it is `SalesOrderID`.
+</Tip>
+
+---
+
+## Full Mapping Example — DimCustomer
+
+The table below shows a complete mapping configuration for loading OLTP `Sales.Customer` rows into a `DimCustomer` dimension table:
+
+| Source Column | Source Type | Transformation | Target Column | Target Type |
+|---|---|---|---|---|
+| `CustomerID` | `INTEGER` | Ninguna | `CustomerKey` | `INTEGER` |
+| `FirstName` | `NVARCHAR(50)` | Upper | `CustomerName` | `NVARCHAR(100)` |
+| `EmailAddress` | `NVARCHAR(50)` | Lower | `Email` | `NVARCHAR(50)` |
+| `BirthDate` | `DATETIME` | Año | `BirthYear` | `INTEGER` |
+| `ModifiedDate` | `DATETIME` | Ninguna | `ModifiedDate` | `DATETIME` |
+| `MiddleName` | `NVARCHAR(50)` | — No mapear — | *(excluded)* | — |
+
+Concat mapping: `FirstName` + `LastName` → `FullName`
+
+The resulting `column_mappings` list passed to `run_dynamic_etl()` would look like this:
+
+```python
+column_mappings = [
+    {"source_column": "CustomerID",   "transform_type": "none",  "target_column": "CustomerKey"},
+    {"source_column": "FirstName",    "transform_type": "upper", "target_column": "CustomerName"},
+    {"source_column": "EmailAddress", "transform_type": "lower", "target_column": "Email"},
+    {"source_column": "BirthDate",    "transform_type": "year",  "target_column": "BirthYear"},
+    {"source_column": "ModifiedDate", "transform_type": "none",  "target_column": "ModifiedDate"},
+    {"type": "concat", "column1": "FirstName", "column2": "LastName", "target_column": "FullName"},
+]
+```
+
+Business key: `CustomerKey`
+
+---
+
+## Validation Rules
+
+The `_validar_y_ejecutar()` function enforces the following rules before submitting the pipeline. All errors are shown as inline `st.error` banners and the pipeline is not started until every issue is resolved:
+
+<Accordion title="Must select source table OR write a SQL query">
+  At least one of `source_table` or `sql_query` must be non-empty. You cannot run ETL without specifying where the data comes from.
+</Accordion>
+
+<Accordion title="Must specify a target table">
+  The `target_table` value must be non-empty. Select a table from the DW destination dropdown.
+</Accordion>
+
+<Accordion title="Must select a business key">
+  The `business_key` value must be non-empty. Use the **Llave de negocio** selector in the *Configuración de carga* sub-section.
+</Accordion>
+
+<Accordion title="Must configure at least one column mapping">
+  The `column_mappings` list must contain at least one entry. If every column is set to **— No mapear —**, this validation will fail.
+</Accordion>
+
+<Accordion title="Business key must be in the mapped target columns">
+  The value selected as the business key must appear as `target_column` in at least one regular mapping (not a concat). This guarantees the incremental deduplication key is actually present in the DataFrame being loaded.
+</Accordion>
+
+<Accordion title="Concat mappings require both source columns">
+  Every entry with `"type": "concat"` must have non-empty `column1` and `column2` values. Adding a concat row and leaving either column on its default without reviewing it will trigger this error.
+</Accordion>

@@ -1,0 +1,206 @@
+---
+title: "DatabaseClient — Dual SQL Server Connection Manager"
+sidebarTitle: "DatabaseClient"
+description: "DatabaseClient manages SQLAlchemy engines for both OLTP and OLAP SQL Server databases, providing connection context managers and schema introspection methods."
+---
+
+`DatabaseClient` is the single entry point for all database connectivity in the ETL pipeline. It holds two SQLAlchemy engines — one for the OLTP source (SQL Server transactional database) and one for the OLAP target (Data Warehouse) — and exposes connection context managers plus schema introspection helpers used by every downstream service. Both engines are created with `pool_pre_ping=True`, which silently recycles stale connections before handing them to callers.
+
+## Class: `DatabaseClient`
+
+```python
+from src.infrastructure.db_client import DatabaseClient
+
+db = DatabaseClient()
+```
+
+### Constructor
+
+`DatabaseClient.__init__()` reads connection strings from the global `settings` singleton and creates two SQLAlchemy engines immediately at instantiation time. No parameters are accepted.
+
+```python
+# settings.py builds the connection URLs from environment variables:
+#   OLTP_DRIVER, OLTP_SERVER, OLTP_DATABASE
+#   OLAP_DRIVER, OLAP_SERVER, OLAP_DATABASE
+# Both use Windows Authentication (Trusted_Connection=yes)
+
+from src.infrastructure.db_client import DatabaseClient
+
+db = DatabaseClient()
+# db.oltp_engine  →  mssql+pyodbc engine pointing at the OLTP database
+# db.olap_engine  →  mssql+pyodbc engine pointing at the OLAP / DW database
+```
+
+<Note>
+  Connection URLs are assembled by `src/config/settings.py` using `urllib.parse.quote_plus` to safely encode the raw pyodbc connection string, including backslash-separated server names. Set the required environment variables (or a `.env` file) before instantiating `DatabaseClient`.
+</Note>
+
+---
+
+## Connection Methods
+
+These two methods return live SQLAlchemy `Connection` objects. Use them as context managers so the connection is automatically returned to the pool when the `with` block exits.
+
+### `get_oltp_connection()`
+
+Returns a context-manager-compatible SQLAlchemy connection to the **OLTP** (source) database.
+
+```python
+with db.get_oltp_connection() as conn:
+    result = conn.execute(text("SELECT TOP 1 * FROM Sales.Orders"))
+    row = result.fetchone()
+```
+
+<ResponseField name="return" type="sqlalchemy.engine.Connection">
+  A SQLAlchemy `Connection` context manager bound to `oltp_engine`. Commits or rolls back automatically on exit depending on whether an exception was raised.
+</ResponseField>
+
+---
+
+### `get_olap_connection()`
+
+Returns a context-manager-compatible SQLAlchemy connection to the **OLAP** (Data Warehouse) target database.
+
+```python
+with db.get_olap_connection() as conn:
+    result = conn.execute(text("SELECT COUNT(*) FROM dim_customers"))
+    print(result.scalar())
+```
+
+<ResponseField name="return" type="sqlalchemy.engine.Connection">
+  A SQLAlchemy `Connection` context manager bound to `olap_engine`. Commits or rolls back automatically on exit depending on whether an exception was raised.
+</ResponseField>
+
+---
+
+## Table Discovery Methods
+
+These methods use SQLAlchemy's `inspect()` to query the database catalogue without writing raw SQL.
+
+### `get_oltp_tables()`
+
+Returns the list of user table names in the OLTP database's **default schema**.
+
+```python
+tables = db.get_oltp_tables()
+# Example output: ['Customers', 'Orders', 'Products', 'OrderDetails']
+```
+
+<ResponseField name="return" type="list[str]">
+  Unqualified table names (no schema prefix) as reported by `Inspector.get_table_names()` against the OLTP engine.
+</ResponseField>
+
+<Note>
+  `get_oltp_tables()` queries only the default schema. To discover tables across all schemas — including schema-qualified names like `Sales.Orders` — use `DataExtractor.extract_tables()` instead.
+</Note>
+
+---
+
+### `get_olap_tables()`
+
+Returns the list of user table names in the OLAP / Data Warehouse database's **default schema**.
+
+```python
+tables = db.get_olap_tables()
+# Example output: ['dim_customers', 'dim_products', 'fact_orders']
+```
+
+<ResponseField name="return" type="list[str]">
+  Unqualified table names as reported by `Inspector.get_table_names()` against the OLAP engine.
+</ResponseField>
+
+---
+
+## Schema Introspection Methods
+
+These methods return column metadata for a given table and are used by the Streamlit UI to populate column-mapping dropdowns at runtime.
+
+### `get_source_columns(table_name)`
+
+Fetches column names and their SQL types from the **OLTP** database. Accepts both plain table names and schema-qualified names separated by a dot.
+
+<ParamField path="table_name" type="str" required>
+  The table to inspect. Supply a plain name (`"Customers"`) or a schema-qualified name (`"Sales.Orders"`). When a dot is present the string is split on the first `.` to derive `schema` and `table` arguments for `Inspector.get_columns()`.
+</ParamField>
+
+<ResponseField name="return" type="list[dict]">
+  A list of column descriptor dicts, each containing:
+
+  <Expandable title="Column descriptor fields">
+    <ResponseField name="name" type="str">
+      The column name as stored in the database catalogue.
+    </ResponseField>
+    <ResponseField name="type" type="str">
+      The SQLAlchemy column type rendered as a string (e.g., `"VARCHAR(100)"`, `"INTEGER"`, `"DATETIME"`).
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+```python Plain table name
+cols = db.get_source_columns("Customers")
+# [
+#   {"name": "CustomerID",   "type": "INTEGER"},
+#   {"name": "CustomerName", "type": "VARCHAR(100)"},
+#   {"name": "CreatedAt",    "type": "DATETIME"},
+# ]
+```
+
+```python Schema-qualified table name
+cols = db.get_source_columns("Sales.Orders")
+# get_columns("Orders", schema="Sales") is called internally
+# [
+#   {"name": "OrderID",   "type": "INTEGER"},
+#   {"name": "OrderDate", "type": "DATETIME"},
+#   {"name": "Total",     "type": "NUMERIC(18, 2)"},
+# ]
+```
+</CodeGroup>
+
+---
+
+### `get_target_columns(table_name)`
+
+Identical behaviour to `get_source_columns` but inspects the **OLAP** (Data Warehouse) engine instead.
+
+<ParamField path="table_name" type="str" required>
+  The DW table to inspect. Accepts plain (`"dim_customers"`) or schema-qualified (`"dbo.fact_orders"`) names.
+</ParamField>
+
+<ResponseField name="return" type="list[dict]">
+  A list of column descriptor dicts, each containing:
+
+  <Expandable title="Column descriptor fields">
+    <ResponseField name="name" type="str">
+      The column name as stored in the DW catalogue.
+    </ResponseField>
+    <ResponseField name="type" type="str">
+      The SQLAlchemy column type rendered as a string.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<CodeGroup>
+```python Plain table name
+cols = db.get_target_columns("dim_customers")
+# [
+#   {"name": "CustomerKey",  "type": "INTEGER"},
+#   {"name": "CustomerName", "type": "NVARCHAR(100)"},
+#   {"name": "LoadDate",     "type": "DATE"},
+# ]
+```
+
+```python Schema-qualified table name
+cols = db.get_target_columns("dbo.fact_orders")
+# get_columns("fact_orders", schema="dbo") is called internally
+# [
+#   {"name": "OrderKey",     "type": "INTEGER"},
+#   {"name": "CustomerKey",  "type": "INTEGER"},
+#   {"name": "OrderYear",    "type": "INTEGER"},
+# ]
+```
+</CodeGroup>
+
+<Warning>
+  The target table must already exist in the Data Warehouse before calling `get_target_columns()`. The method does not create tables — it only reads the catalogue. Use the same precaution before calling `DataLoader.load_incremental()`.
+</Warning>

@@ -1,0 +1,180 @@
+---
+title: "Settings — Environment-Driven Connection Configuration"
+sidebarTitle: "Settings"
+description: "The Settings class reads OLTP and OLAP connection variables from .env using python-dotenv and builds percent-encoded SQLAlchemy mssql+pyodbc URLs."
+---
+
+The `Settings` class is the single source of truth for database connectivity in **ETL Dinámico para Data Warehouse**. At module import time, `load_dotenv()` populates the process environment from a `.env` file, and then the `Settings` class body executes its statements at class-definition time — meaning `OLTP_URL` and `OLAP_URL` are built once, eagerly, before any application code runs. The resulting percent-encoded `mssql+pyodbc` URLs are then consumed by `DatabaseClient` to create SQLAlchemy engine instances for both the OLTP source and the OLAP Data Warehouse.
+
+## How It Works
+
+`Settings` does not rely on `__init__` or instance methods. Every attribute is defined directly in the class body, so the entire URL-building logic runs exactly once when Python first imports `src.config.settings`. The process has three steps:
+
+1. **Load environment variables** — `load_dotenv()` reads `.env` from the working directory (or any parent directory) and merges its key-value pairs into `os.environ`.
+2. **Build raw ODBC strings** — `raw_oltp` and `raw_olap` are plain semicolon-delimited ODBC connection strings assembled with f-strings from the environment variables.
+3. **Percent-encode into SQLAlchemy URLs** — `urllib.parse.quote_plus()` encodes the raw ODBC string so it can be safely embedded as a query-string value in the final `mssql+pyodbc:///?odbc_connect=…` URL. This is especially important for backslashes in named SQL Server instances (e.g., `ELIEL\SQLEXPRESS` → `ELIEL%5CSQLEXPRESS`).
+
+```python
+# src/config/settings.py (abridged)
+import os
+import urllib
+from dotenv import load_dotenv
+
+load_dotenv()
+
+class Settings:
+    raw_oltp = (
+        f"DRIVER={os.getenv('OLTP_DRIVER')};"
+        f"SERVER={os.getenv('OLTP_SERVER')};"
+        f"DATABASE={os.getenv('OLTP_DATABASE')};"
+        f"Trusted_Connection=yes;"
+        f"TrustServerCertificate=yes;"
+    )
+
+    raw_olap = (
+        f"DRIVER={os.getenv('OLAP_DRIVER')};"
+        f"SERVER={os.getenv('OLAP_SERVER')};"
+        f"DATABASE={os.getenv('OLAP_DATABASE')};"
+        f"Trusted_Connection=yes;"
+        f"TrustServerCertificate=yes;"
+    )
+
+    OLTP_URL = f"mssql+pyodbc:///?odbc_connect={urllib.parse.quote_plus(raw_oltp)}"
+    OLAP_URL = f"mssql+pyodbc:///?odbc_connect={urllib.parse.quote_plus(raw_olap)}"
+
+settings = Settings()
+```
+
+### Fixed ODBC Parameters
+
+Both raw connection strings include two fixed parameters that are not sourced from the environment:
+
+| Parameter | Value | Purpose |
+|---|---|---|
+| `Trusted_Connection` | `yes` | Uses Windows Authentication — no username or password required |
+| `TrustServerCertificate` | `yes` | Skips SSL certificate validation, required for local/development SQL Server instances |
+
+### URL Format
+
+After encoding, each URL follows this structure:
+
+```
+mssql+pyodbc:///?odbc_connect=DRIVER%3DODBC+Driver+17+for+SQL+Server%3BSERVER%3DELIEL%5CSQLEXPRESS%3BDATABASE%3DNORTHWND%3BTrusted_Connection%3Dyes%3BTrustServerCertificate%3Dyes%3B
+```
+
+<Warning>
+`Settings` is evaluated at **class definition time** — all attribute assignments in the class body run the moment Python imports `settings.py`. If `.env` is missing or any required variable is absent when the module is first imported, `os.getenv()` returns `None` and the resulting `OLTP_URL`/`OLAP_URL` strings will contain the literal text `None` in place of the driver, server, or database name. Always ensure the `.env` file exists and contains all six required variables before starting the application.
+</Warning>
+
+---
+
+## Environment Variables
+
+These six variables must be present in `.env` (or in the system environment) before `settings.py` is imported. A minimal `.env` for a local development setup looks like:
+
+```bash
+# .env
+OLTP_DRIVER=ODBC Driver 17 for SQL Server
+OLTP_SERVER=ELIEL\SQLEXPRESS
+OLTP_DATABASE=NORTHWND
+
+OLAP_DRIVER=ODBC Driver 17 for SQL Server
+OLAP_SERVER=ELIEL\SQLEXPRESS
+OLAP_DATABASE=DataWarehouse
+```
+
+<ParamField path="OLTP_SERVER" type="string" required>
+  SQL Server instance name (or host) for the OLTP source database. Named instances use a backslash separator — `quote_plus` will encode this to `%5C` automatically.
+
+  **Example:** `ELIEL\SQLEXPRESS`
+</ParamField>
+
+<ParamField path="OLTP_DATABASE" type="string" required>
+  The name of the OLTP source database on the SQL Server instance specified by `OLTP_SERVER`.
+
+  **Example:** `NORTHWND`
+</ParamField>
+
+<ParamField path="OLTP_DRIVER" type="string" required>
+  The ODBC driver string exactly as registered in the system ODBC driver manager. The driver must be installed on the host running the ETL.
+
+  **Example:** `ODBC Driver 17 for SQL Server`
+</ParamField>
+
+<ParamField path="OLAP_SERVER" type="string" required>
+  SQL Server instance name (or host) for the OLAP Data Warehouse target database.
+
+  **Example:** `ELIEL\SQLEXPRESS`
+</ParamField>
+
+<ParamField path="OLAP_DATABASE" type="string" required>
+  The name of the Data Warehouse database on the SQL Server instance specified by `OLAP_SERVER`.
+
+  **Example:** `DataWarehouse`
+</ParamField>
+
+<ParamField path="OLAP_DRIVER" type="string" required>
+  The ODBC driver string for the OLAP connection. Can differ from `OLTP_DRIVER` if both databases are served by different SQL Server versions.
+
+  **Example:** `ODBC Driver 17 for SQL Server`
+</ParamField>
+
+---
+
+## Class Attributes
+
+<ResponseField name="Settings.OLTP_URL" type="str">
+  Fully percent-encoded SQLAlchemy connection URL for the **OLTP source database**. Built from `OLTP_DRIVER`, `OLTP_SERVER`, and `OLTP_DATABASE` plus the fixed `Trusted_Connection=yes` and `TrustServerCertificate=yes` parameters.
+
+  Format: `mssql+pyodbc:///?odbc_connect=<encoded_odbc_string>`
+</ResponseField>
+
+<ResponseField name="Settings.OLAP_URL" type="str">
+  Fully percent-encoded SQLAlchemy connection URL for the **OLAP Data Warehouse**. Built from `OLAP_DRIVER`, `OLAP_SERVER`, and `OLAP_DATABASE` plus the same fixed authentication parameters.
+
+  Format: `mssql+pyodbc:///?odbc_connect=<encoded_odbc_string>`
+</ResponseField>
+
+---
+
+## The `settings` Singleton
+
+A single `Settings` instance named `settings` is created at the bottom of the module and is the canonical object to import throughout the project:
+
+```python
+from src.config.settings import settings
+
+print(settings.OLTP_URL)  # mssql+pyodbc:///?odbc_connect=...
+print(settings.OLAP_URL)  # mssql+pyodbc:///?odbc_connect=...
+```
+
+Because Python caches imported modules, every call to `from src.config.settings import settings` returns the same object — `Settings.__init__` is never invoked more than once per interpreter session.
+
+<Note>
+`DatabaseClient` is the **only intended consumer** of `settings.OLTP_URL` and `settings.OLAP_URL`. Application code, pipeline modules, and the Streamlit UI should import `DatabaseClient` directly rather than reading the raw URLs from `Settings`. This keeps connection-management logic centralized and makes it easier to swap engines (e.g., for testing) without touching call sites.
+</Note>
+
+<Tip>
+To verify that your `.env` is loaded correctly before running the full ETL, you can do a quick sanity check from the Python REPL:
+
+```python
+from src.config.settings import settings
+
+# Both URLs should not contain the word "None"
+assert "None" not in settings.OLTP_URL, "OLTP env vars are missing!"
+assert "None" not in settings.OLAP_URL, "OLAP env vars are missing!"
+print("Settings loaded successfully.")
+```
+</Tip>
+
+---
+
+## Dependencies
+
+`Settings` relies on the following packages from `requirements.txt`:
+
+| Package | Version | Role |
+|---|---|---|
+| `python-dotenv` | `>=1.0.0` | Loads `.env` into `os.environ` via `load_dotenv()` |
+| `SQLAlchemy` | `>=2.0.0` | Consumes the URL strings to create engine instances |
+| `pyodbc` | `>=5.0.0` | Low-level ODBC driver bridge used by the `mssql+pyodbc` dialect |

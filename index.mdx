@@ -1,20 +1,67 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "ETL Dinámico: Dynamic Data Warehouse Pipeline"
+sidebarTitle: "Home"
+description: "A modular Python ETL system that extracts from SQL Server OLTP, transforms with Pandas, and loads incrementally into your Data Warehouse — with a Streamlit UI."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+ETL Dinámico is a layered, modular Extract-Transform-Load system that connects a transactional SQL Server database (OLTP) to a Data Warehouse (OLAP). It lets you configure column mappings, apply transformations, and run incremental loads entirely through an interactive Streamlit dashboard — no hardcoded schemas required.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install dependencies, configure your .env, and run your first ETL pipeline in minutes.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Set up OLTP and OLAP connection strings using environment variables.
+  </Card>
+  <Card title="Architecture Overview" icon="sitemap" href="/architecture/overview">
+    Understand the four-layer design: Settings, DatabaseClient, Services, and UI.
+  </Card>
+  <Card title="ETL Pipeline" icon="arrow-right-arrow-left" href="/pipeline/running-etl">
+    Learn how extraction, transformation, and incremental loading work together.
+  </Card>
+  <Card title="UI Dashboard Guide" icon="display" href="/ui/dashboard">
+    Use the Streamlit interface to map columns, preview data, and execute ETL runs.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/etl-pipeline">
+    Full reference for all public classes: ETLPipeline, DataExtractor, DataTransformer, and more.
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## How It Works
+
+ETL Dinámico follows a clean three-phase pipeline orchestrated by `ETLPipeline.run_dynamic_etl()`:
+
+<Steps>
+  <Step title="Extract">
+    `DataExtractor` reads from your SQL Server OLTP source — either a full table or a custom SQL query — and returns a Pandas DataFrame.
+  </Step>
+  <Step title="Transform">
+    `DataTransformer` applies per-column operations: uppercase/lowercase text, date component extraction (year, month, day), or concatenating two columns into one.
+  </Step>
+  <Step title="Load">
+    `DataLoader.load_incremental()` compares records against the existing Data Warehouse table using a **business key**, inserting only new rows to prevent duplicates.
+  </Step>
+</Steps>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Dynamic Column Mapping" icon="table-columns">
+    Configure source→target column mappings and transformations at runtime through the UI — no code changes needed.
+  </Card>
+  <Card title="Incremental Loading" icon="layer-group">
+    Business-key deduplication ensures only new records enter the Data Warehouse on every run.
+  </Card>
+  <Card title="Multiple Transform Types" icon="wand-magic-sparkles">
+    Upper/lower case conversion, year/month/day extraction from dates, and multi-column concatenation.
+  </Card>
+  <Card title="Custom SQL Support" icon="database">
+    Write a custom SELECT query as the extraction source instead of selecting a full table.
+  </Card>
+  <Card title="Streamlit Dashboard" icon="chart-bar">
+    An interactive web UI lets you configure and run ETL pipelines without writing Python.
+  </Card>
+  <Card title="Automated Tests" icon="flask">
+    Pytest suite covers connection health, transformer logic, incremental loader filtering, and full pipeline orchestration.
+  </Card>
+</CardGroup>

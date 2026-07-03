@@ -1,72 +1,90 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "ETL Dinámico para Data Warehouse",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
-  },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
+    "primary": "#2563EB",
+    "light": "#EFF6FF",
+    "dark": "#1E3A5F"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/obedc295/proyect_dw"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/obedc295/proyect_dw"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "configuration"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/data-flow"
+            ]
+          },
+          {
+            "group": "ETL Pipeline",
+            "pages": [
+              "pipeline/extraction",
+              "pipeline/transformation",
+              "pipeline/loading",
+              "pipeline/running-etl"
+            ]
+          },
+          {
+            "group": "UI Guide",
+            "pages": [
+              "ui/dashboard",
+              "ui/column-mapping",
+              "ui/incremental-load"
+            ]
+          },
+          {
+            "group": "Testing & Development",
+            "pages": [
+              "testing/running-tests",
+              "testing/test-reference"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core Classes",
+            "pages": [
+              "api/database-client",
+              "api/data-extractor",
+              "api/data-transformer",
+              "api/data-loader",
+              "api/etl-pipeline"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "api/settings"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

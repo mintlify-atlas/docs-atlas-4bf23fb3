@@ -1,0 +1,120 @@
+---
+title: "ETL Dinámico: Dynamic Data Warehouse ETL for SQL Server"
+sidebarTitle: "Introduction"
+description: "ETL Dinámico is a modular Python ETL system that extracts from SQL Server OLTP, transforms data with Pandas, and loads incrementally into a Data Warehouse."
+---
+
+ETL Dinámico is a modular, runtime-configurable ETL (Extract, Transform, Load) system built entirely in Python. It bridges an operational SQL Server database (OLTP) with a Data Warehouse (OLAP) by orchestrating extraction, transformation, and incremental loading — all driven by configuration that is defined at runtime through a Streamlit interface or through Python code directly, without touching a single line of pipeline logic.
+
+Traditional ETL tools often require hardcoded mappings, vendor-specific tooling, or rigid schema assumptions. ETL Dinámico takes a different approach: every pipeline run is described by a list of column mappings and a business key passed at call time. This means the same engine can load a `DimCustomers` table today and a `FactOrders` table tomorrow, with zero changes to the core codebase.
+
+## Why ETL Dinámico Exists
+
+Most small-to-medium data warehouse projects face a common problem: the ETL layer starts as a handful of SQL scripts or hardcoded Pandas notebooks and quickly becomes a maintenance burden as tables and transformation rules evolve. ETL Dinámico was built to solve this by separating **what to load** (configuration) from **how to load it** (the pipeline engine), giving data engineers and analysts a single, reusable system they can point at any SQL Server table pair.
+
+Key motivations for the project:
+
+- **Dynamic runtime configuration** — column mappings, transformation types, business keys, and source/destination tables are all passed as data, not code.
+- **Incremental loading by business key** — the loader queries existing keys in the destination table and only appends rows that are not already present, making re-runs safe and idempotent.
+- **No vendor lock-in** — the stack is pure Python: `pyodbc` for ODBC connectivity, `SQLAlchemy` for engine abstraction, `Pandas` for in-memory transformation, and `Streamlit` for a self-contained UI.
+- **Testable by design** — each layer is a plain Python class with no global side effects, making unit testing with `pytest` straightforward.
+
+## System Architecture: Four Layers
+
+ETL Dinámico is structured as four distinct layers. Data and configuration flow downward through the stack; results and status flow back upward.
+
+### Layer 1 — Settings (`src/config/settings.py`)
+
+The `Settings` class is the single source of truth for database connectivity. It reads six environment variables from a `.env` file using `python-dotenv`, assembles raw ODBC connection strings, and encodes them into fully qualified SQLAlchemy URLs using `urllib.parse.quote_plus`. Both the OLTP (source) and OLAP (destination) engines are configured here. No other layer touches environment variables directly.
+
+```python
+# The Settings class produces two SQLAlchemy-ready URLs:
+# settings.OLTP_URL  — points at the source transactional database
+# settings.OLAP_URL  — points at the Data Warehouse destination
+```
+
+### Layer 2 — DatabaseClient (`src/infrastructure/db_client.py`)
+
+`DatabaseClient` wraps two SQLAlchemy engines — one for OLTP, one for OLAP — and exposes a clean interface for the rest of the application. It provides connection context managers, table name inspection, and column metadata retrieval. The Streamlit UI and the ETL services both depend on `DatabaseClient` as their single point of database access.
+
+```python
+from src.infrastructure.db_client import DatabaseClient
+
+db_client = DatabaseClient()
+# Inspect available tables in the source
+oltp_tables = db_client.get_oltp_tables()
+# Inspect column names and types in any table
+columns = db_client.get_source_columns("dbo.Customers")
+```
+
+### Layer 3 — Services (`src/services/`)
+
+The services layer contains four classes that each own one responsibility in the ETL flow:
+
+| Class | File | Responsibility |
+|---|---|---|
+| `DataExtractor` | `extractor.py` | Reads rows from the OLTP source via `pd.read_sql`. Supports full-table extraction, column selection, row limits, and raw SQL queries. |
+| `DataTransformer` | `transformer.py` | Applies in-memory Pandas transformations: `upper`/`lower` case, `concat` of two columns, and `year`/`month`/`day` date extraction. |
+| `DataLoader` | `loader.py` | Performs incremental upsert-by-exclusion: queries existing business keys from the OLAP table and appends only new rows using `DataFrame.to_sql`. |
+| `ETLPipeline` | `pipeline.py` | Orchestrates the three services above. Its `run_dynamic_etl()` method accepts a source table, a target table, a business key, and a list of column mapping dictionaries, and returns a result dictionary with row counts and a data sample. |
+
+### Layer 4 — Streamlit UI (`app.py`)
+
+The Streamlit application provides a fully interactive, browser-based control panel for the pipeline. Users can select a source table (or write a custom SQL query), inspect column types, configure column-to-column mappings with transformation rules, specify a concatenation mapping for combining two columns into one, choose the destination table in the Data Warehouse, set the business key for incremental loading, and execute the pipeline — all without writing any Python. Results are displayed inline with row-count metrics, a JSON detail view, and a data preview table.
+
+## Supported Data Sources
+
+ETL Dinámico currently supports **Microsoft SQL Server** as both the OLTP source and the OLAP destination. Connectivity is provided through the **ODBC Driver 17 for SQL Server**, using **Windows Authentication** (`Trusted_Connection=yes`) so that no username or password needs to be stored in the `.env` file or in code.
+
+Both databases can live on the same SQL Server instance (common in development with a local `SQLEXPRESS` installation) or on separate servers in a production environment.
+
+## Key Concepts
+
+### OLTP Source vs. OLAP Destination
+
+The **OLTP** (Online Transaction Processing) database is your operational system — typically normalized tables updated in real time by business applications. The **OLAP** (Online Analytical Processing) database is your Data Warehouse — typically a star or snowflake schema with denormalized dimension and fact tables designed for analytical queries.
+
+ETL Dinámico reads from OLTP and writes to OLAP, handling the structural mismatch between the two through its column mapping and transformation system.
+
+### Incremental Loading with Business Keys
+
+Rather than truncating and reloading destination tables on every run, ETL Dinámico uses a **business key** strategy. Before writing any rows, `DataLoader.load_incremental()` queries the set of existing values in the business key column of the destination table. Rows whose business key already exists in the destination are filtered out; only net-new rows are appended. This makes pipeline runs repeatable and safe — re-running after a partial failure will never produce duplicate records.
+
+### Column Mappings and Transform Types
+
+Each pipeline run is driven by a list of column mapping dictionaries. Each mapping declares:
+
+- **`source_column`** — the column name in the source DataFrame.
+- **`transform_type`** — one of `none`, `upper`, `lower`, `year`, `month`, `day`, or the special type `concat` (which combines two source columns).
+- **`target_column`** — the column name to write in the destination DataFrame.
+
+This design means transformation logic lives in data, not in code, making every pipeline configuration inspectable, serializable, and reproducible.
+
+## Prerequisites
+
+Before installing ETL Dinámico, ensure the following are available on your system:
+
+<Info>
+All three prerequisites must be in place before running `pip install -r requirements.txt`. The `pyodbc` package links against the ODBC Driver at install time on some platforms.
+</Info>
+
+- **Python 3.10 or higher** — required for the `list[dict]` and `str | None` type hint syntax used throughout the codebase.
+- **Microsoft SQL Server** — both the source (OLTP) and destination (OLAP/Data Warehouse) databases must already exist and be accessible. A local `SQL Server Express` instance is sufficient for development.
+- **ODBC Driver 17 for SQL Server** — the named driver `ODBC Driver 17 for SQL Server` must be registered on the machine running ETL Dinámico. Download it from the [Microsoft documentation](https://learn.microsoft.com/en-us/sql/connect/odbc/download-odbc-driver-for-sql-server).
+
+## Explore the Documentation
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install the project, configure your `.env` file, and run your first ETL pipeline in five steps.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Deep-dive into all six environment variables, connection string encoding, and multi-server setups.
+  </Card>
+  <Card title="ETL Pipeline" icon="arrow-right-arrow-left" href="/pipeline/running-etl">
+    Learn how `ETLPipeline.run_dynamic_etl()` orchestrates extraction, transformation, and incremental loading.
+  </Card>
+  <Card title="UI Guide" icon="display" href="/ui/dashboard">
+    Walk through the Streamlit interface: table selection, column mapping, transformation rules, and executing a run.
+  </Card>
+</CardGroup>

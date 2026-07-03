@@ -1,0 +1,318 @@
+---
+title: "DataTransformer — Pandas-Based Column Transformations"
+sidebarTitle: "DataTransformer"
+description: "DataTransformer applies text case conversion, date component extraction, and column concatenation to Pandas DataFrames. No database calls — pure Pandas operations."
+---
+
+`DataTransformer` handles the **Transform** phase of the ETL pipeline entirely in memory using Pandas. It receives a DataFrame produced by `DataExtractor`, applies one or more column-level transformations, and writes each result into a new column — leaving the original source columns intact. Because every method both modifies the DataFrame in-place **and** returns it, you can chain calls or pass the DataFrame directly into subsequent pipeline steps without intermediate copies.
+
+## Class: `DataTransformer`
+
+```python
+from src.services.transformer import DataTransformer
+
+transformer = DataTransformer()
+```
+
+### Constructor
+
+`DataTransformer.__init__()` accepts no parameters. The class holds no state — all transformation logic lives entirely in the methods below, making each instance safe to reuse across multiple DataFrame operations.
+
+---
+
+## Methods
+
+### `capitalize_transform()`
+
+Applies a text case operation to a string column and writes the result to a new column. The original column is preserved. Use `'upper'` to normalise names or codes for warehouse key matching, or `'lower'` for case-insensitive searches.
+
+<ParamField path="df" type="pd.DataFrame" required>
+  The source DataFrame to transform. Modified in-place; the same object is also returned.
+</ParamField>
+
+<ParamField path="column" type="str" required>
+  Name of the existing string column to read from. Must be a `str`-typed (object dtype) Pandas column for `.str` accessor methods to function correctly.
+</ParamField>
+
+<ParamField path="new_column" type="str" required>
+  Name of the column to write the transformed values into. If a column with this name already exists it will be overwritten. If it does not exist it will be appended.
+</ParamField>
+
+<ParamField path="operation" type="str" required>
+  Transformation to apply. Accepted values:
+
+  | Value | Pandas call | Result |
+  |-------|-------------|--------|
+  | `'upper'` | `.str.upper()` | All characters uppercased |
+  | `'lower'` | `.str.lower()` | All characters lowercased |
+</ParamField>
+
+<ResponseField name="return" type="pd.DataFrame">
+  The modified DataFrame (same object passed in). The `new_column` now contains the transformed values.
+</ResponseField>
+
+<CodeGroup>
+```python Before / After — upper
+import pandas as pd
+from src.services.transformer import DataTransformer
+
+transformer = DataTransformer()
+
+df = pd.DataFrame({
+    "CustomerName": ["Alice Smith", "bob jones", "Carol White"],
+})
+
+# Before:
+#    CustomerName
+# 0   Alice Smith
+# 1     bob jones
+# 2   Carol White
+
+df = transformer.capitalize_transform(
+    df,
+    column="CustomerName",
+    new_column="CustomerNameUpper",
+    operation="upper"
+)
+
+# After:
+#    CustomerName  CustomerNameUpper
+# 0   Alice Smith        ALICE SMITH
+# 1     bob jones          BOB JONES
+# 2   Carol White        CAROL WHITE
+```
+
+```python Before / After — lower
+df = pd.DataFrame({
+    "ProductCode": ["PROD-001", "PROD-002", "PROD-003"],
+})
+
+# Before:
+#   ProductCode
+# 0    PROD-001
+# 1    PROD-002
+# 2    PROD-003
+
+df = transformer.capitalize_transform(
+    df,
+    column="ProductCode",
+    new_column="ProductCodeLower",
+    operation="lower"
+)
+
+# After:
+#   ProductCode ProductCodeLower
+# 0    PROD-001         prod-001
+# 1    PROD-002         prod-002
+# 2    PROD-003         prod-003
+```
+</CodeGroup>
+
+---
+
+### `concat_transform()`
+
+Concatenates two string columns with a single space separator and writes the result to a new column. Useful for building full-name or address fields that do not exist as a single column in the OLTP source.
+
+The operation applied is:
+
+```python
+df[new_column] = df[column1] + ' ' + df[column2]
+```
+
+<ParamField path="df" type="pd.DataFrame" required>
+  The source DataFrame to transform. Modified in-place; the same object is also returned.
+</ParamField>
+
+<ParamField path="new_column" type="str" required>
+  Name of the column to write the concatenated result into. Created if it does not exist; overwritten if it does.
+</ParamField>
+
+<ParamField path="column1" type="str" required>
+  Name of the first (left) column. Its values appear before the space separator.
+</ParamField>
+
+<ParamField path="column2" type="str" required>
+  Name of the second (right) column. Its values appear after the space separator.
+</ParamField>
+
+<ResponseField name="return" type="pd.DataFrame">
+  The modified DataFrame with the new concatenated column appended.
+</ResponseField>
+
+```python
+import pandas as pd
+from src.services.transformer import DataTransformer
+
+transformer = DataTransformer()
+
+df = pd.DataFrame({
+    "FirstName": ["Alice", "Bob",   "Carol"],
+    "LastName":  ["Smith", "Jones", "White"],
+})
+
+# Before:
+#   FirstName LastName
+# 0     Alice    Smith
+# 1       Bob    Jones
+# 2     Carol    White
+
+df = transformer.concat_transform(
+    df,
+    new_column="FullName",
+    column1="FirstName",
+    column2="LastName"
+)
+
+# After:
+#   FirstName LastName      FullName
+# 0     Alice    Smith   Alice Smith
+# 1       Bob    Jones     Bob Jones
+# 2     Carol    White   Carol White
+```
+
+<Note>
+  The separator is always a single space character. If you need a different separator (e.g., a comma or hyphen), apply a direct Pandas expression on the returned DataFrame before passing it to `DataLoader`.
+</Note>
+
+---
+
+### `date_transform()`
+
+Extracts a single date component (year, month, or day) from a date or timestamp column and writes the integer result to a new column. The source column is **converted to `datetime64`** in-place via `pd.to_datetime()` as a first step, which means its dtype changes from `object` or `str` to `datetime64[ns]` after the call.
+
+<ParamField path="df" type="pd.DataFrame" required>
+  The source DataFrame to transform. Modified in-place; the same object is also returned.
+</ParamField>
+
+<ParamField path="column" type="str" required>
+  Name of the date/timestamp column to read from. The column is first coerced to `datetime64` using `pd.to_datetime(df[column])`, so string dates in common ISO or locale formats are accepted.
+</ParamField>
+
+<ParamField path="new_column" type="str" required>
+  Name of the column to write the extracted integer component into. Created if it does not exist; overwritten if it does.
+</ParamField>
+
+<ParamField path="operation" type="str" required>
+  Date component to extract. Accepted values:
+
+  | Value | Pandas accessor | Result dtype |
+  |-------|-----------------|--------------|
+  | `'year'`  | `.dt.year`  | `int64` — four-digit year (e.g., `2024`) |
+  | `'month'` | `.dt.month` | `int64` — month number `1`–`12` |
+  | `'day'`   | `.dt.day`   | `int64` — day of month `1`–`31` |
+</ParamField>
+
+<ResponseField name="return" type="pd.DataFrame">
+  The modified DataFrame. The source `column` is now `datetime64[ns]` and `new_column` contains the extracted integer component.
+</ResponseField>
+
+<CodeGroup>
+```python Before / After — year
+import pandas as pd
+from src.services.transformer import DataTransformer
+
+transformer = DataTransformer()
+
+df = pd.DataFrame({
+    "OrderDate": ["2022-03-15", "2023-07-04", "2024-11-28"],
+})
+
+# Before:
+#    OrderDate
+# 0 2022-03-15
+# 1 2023-07-04
+# 2 2024-11-28
+
+df = transformer.date_transform(
+    df,
+    column="OrderDate",
+    new_column="OrderYear",
+    operation="year"
+)
+
+# After:
+#   OrderDate (datetime64)  OrderYear
+# 0        2022-03-15            2022
+# 1        2023-07-04            2023
+# 2        2024-11-28            2024
+```
+
+```python Before / After — month
+df = pd.DataFrame({
+    "ShipDate": ["2024-01-10", "2024-06-22", "2024-12-01"],
+})
+
+df = transformer.date_transform(
+    df,
+    column="ShipDate",
+    new_column="ShipMonth",
+    operation="month"
+)
+
+# After:
+#   ShipDate (datetime64)  ShipMonth
+# 0          2024-01-10            1
+# 1          2024-06-22            6
+# 2          2024-12-01           12
+```
+
+```python Before / After — day
+df = pd.DataFrame({
+    "InvoiceDate": ["2024-04-05", "2024-09-18", "2024-12-31"],
+})
+
+df = transformer.date_transform(
+    df,
+    column="InvoiceDate",
+    new_column="InvoiceDay",
+    operation="day"
+)
+
+# After:
+#   InvoiceDate (datetime64)  InvoiceDay
+# 0           2024-04-05               5
+# 1           2024-09-18              18
+# 2           2024-12-31              31
+```
+</CodeGroup>
+
+<Warning>
+  Because `date_transform()` calls `pd.to_datetime()` on the source `column`, the original column's dtype is permanently changed from `object` to `datetime64[ns]` in the DataFrame. If you need to preserve the original string representation, copy the column to a new name before calling this method.
+</Warning>
+
+---
+
+## Chaining Transformations
+
+All three methods accept and return the same DataFrame object, so multiple transformations can be composed in sequence. The `ETLPipeline` class uses exactly this pattern, iterating over a `column_mappings` list and calling the appropriate transformer method for each entry.
+
+```python
+import pandas as pd
+from src.services.transformer import DataTransformer
+
+transformer = DataTransformer()
+
+df = pd.DataFrame({
+    "FirstName":  ["alice",  "BOB"],
+    "LastName":   ["smith",  "JONES"],
+    "HireDate":   ["2020-03-01", "2019-11-15"],
+})
+
+# 1. Uppercase first name
+transformer.capitalize_transform(df, "FirstName",  "FirstNameUpper", "upper")
+
+# 2. Uppercase last name
+transformer.capitalize_transform(df, "LastName",   "LastNameUpper",  "upper")
+
+# 3. Concatenate into full name
+transformer.concat_transform(df, "FullName", "FirstNameUpper", "LastNameUpper")
+
+# 4. Extract hire year
+transformer.date_transform(df, "HireDate", "HireYear", "year")
+
+print(df[["FullName", "HireYear"]])
+#       FullName  HireYear
+# 0  ALICE SMITH      2020
+# 1    BOB JONES      2019
+```

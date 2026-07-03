@@ -1,0 +1,232 @@
+---
+title: "Transforming Data with DataTransformer"
+sidebarTitle: "Transformation"
+description: "DataTransformer applies per-column operations to a Pandas DataFrame: text case conversion, date component extraction, and multi-column string concatenation."
+---
+
+`DataTransformer` applies column-level transformations to a Pandas `DataFrame` extracted from the OLTP source. It makes no database calls — every operation is pure Pandas logic that runs entirely in memory. All three methods accept a `DataFrame` as their first argument and write their result into a new or existing column, then return the modified `DataFrame`. This design makes transformations chainable and keeps the original source columns intact (where applicable).
+
+## Transform types at a glance
+
+| Transform | Method | `operation` values | Input type | Output type |
+|---|---|---|---|---|
+| Text case | `capitalize_transform` | `upper`, `lower` | string | string |
+| Concatenation | `concat_transform` | N/A | string, string | string |
+| Date extraction | `date_transform` | `year`, `month`, `day` | date / string | integer |
+
+---
+
+## Class overview
+
+`DataTransformer` takes no constructor arguments. Instantiate it once and reuse it across multiple DataFrame operations.
+
+```python
+from src.services.transformer import DataTransformer
+
+transformer = DataTransformer()
+```
+
+---
+
+## Public methods
+
+### `capitalize_transform`
+
+```python
+capitalize_transform(df, column: str, new_column: str, operation: str) -> pd.DataFrame
+```
+
+Converts the string values of `column` to either uppercase or lowercase and writes the result into `new_column`. The original `column` is left unchanged.
+
+- `operation='upper'` applies `.str.upper()` — all characters become uppercase.
+- `operation='lower'` applies `.str.lower()` — all characters become lowercase.
+
+```python
+import pandas as pd
+from src.services.transformer import DataTransformer
+
+transformer = DataTransformer()
+
+df = pd.DataFrame({
+    "CompanyName": ["Acme Corp", "globex inc", "Initech"]
+})
+
+# Before:
+#    CompanyName
+# 0    Acme Corp
+# 1   globex inc
+# 2      Initech
+
+df = transformer.capitalize_transform(
+    df,
+    column="CompanyName",
+    new_column="CompanyNameUpper",
+    operation="upper"
+)
+
+# After:
+#    CompanyName  CompanyNameUpper
+# 0    Acme Corp        ACME CORP
+# 1   globex inc       GLOBEX INC
+# 2      Initech          INITECH
+```
+
+```python
+# Lowercase example
+df = transformer.capitalize_transform(
+    df,
+    column="CompanyName",
+    new_column="CompanyNameLower",
+    operation="lower"
+)
+# CompanyNameLower: ['acme corp', 'globex inc', 'initech']
+```
+
+<Note>
+  `capitalize_transform` writes its output to `new_column` — the source `column` is preserved unchanged in the `DataFrame`. If `new_column` is the same string as `column`, the original values will be overwritten.
+</Note>
+
+---
+
+### `concat_transform`
+
+```python
+concat_transform(df, new_column: str, column1: str, column2: str) -> pd.DataFrame
+```
+
+Joins two string columns with a single space separator and stores the result in `new_column`. The concatenation is performed as:
+
+```python
+df[new_column] = df[column1] + ' ' + df[column2]
+```
+
+Both source columns are preserved in the `DataFrame`.
+
+```python
+import pandas as pd
+from src.services.transformer import DataTransformer
+
+transformer = DataTransformer()
+
+df = pd.DataFrame({
+    "City":    ["London", "Berlin", "Tokyo"],
+    "Country": ["UK",     "Germany", "Japan"],
+})
+
+# Before:
+#      City  Country
+# 0  London       UK
+# 1  Berlin  Germany
+# 2   Tokyo    Japan
+
+df = transformer.concat_transform(
+    df,
+    new_column="CityCountry",
+    column1="City",
+    column2="Country"
+)
+
+# After:
+#      City  Country    CityCountry
+# 0  London       UK      London UK
+# 1  Berlin  Germany  Berlin Germany
+# 2   Tokyo    Japan    Tokyo Japan
+```
+
+<Note>
+  Like `capitalize_transform`, `concat_transform` writes its result to `new_column` without modifying `column1` or `column2`. Both source columns remain available for use in subsequent transformations or as pass-through columns.
+</Note>
+
+---
+
+### `date_transform`
+
+```python
+date_transform(df, column: str, new_column: str, operation: str) -> pd.DataFrame
+```
+
+Extracts a single date component (year, month, or day) from `column` and stores the integer result in `new_column`. The source column is first coerced to `datetime64` via `pd.to_datetime()` in-place, then the appropriate `.dt` accessor is used:
+
+- `operation='year'` → `.dt.year` — returns the four-digit year as an integer.
+- `operation='month'` → `.dt.month` — returns the month number (1–12) as an integer.
+- `operation='day'` → `.dt.day` — returns the day of the month (1–31) as an integer.
+
+```python
+import pandas as pd
+from src.services.transformer import DataTransformer
+
+transformer = DataTransformer()
+
+df = pd.DataFrame({
+    "OrderDate": ["2023-03-15", "2022-11-02", "2024-07-29"]
+})
+
+# Before:
+#    OrderDate
+# 0  2023-03-15
+# 1  2022-11-02
+# 2  2024-07-29
+
+df = transformer.date_transform(
+    df,
+    column="OrderDate",
+    new_column="OrderYear",
+    operation="year"
+)
+
+# After:
+#    OrderDate (now datetime64)  OrderYear
+# 0             2023-03-15           2023
+# 1             2022-11-02           2022
+# 2             2024-07-29           2024
+```
+
+```python
+# Extract month
+df = transformer.date_transform(df, column="OrderDate", new_column="OrderMonth", operation="month")
+# OrderMonth: [3, 11, 7]
+
+# Extract day
+df = transformer.date_transform(df, column="OrderDate", new_column="OrderDay", operation="day")
+# OrderDay: [15, 2, 29]
+```
+
+<Note>
+  `date_transform` converts the **source column** in-place to `datetime64` as part of processing — `df[column] = pd.to_datetime(df[column])` is called before extracting the component. The source column type will change from `object` (string) or another date-like type to `datetime64[ns]` after this method runs.
+</Note>
+
+---
+
+## Using transformations inside `ETLPipeline`
+
+When `ETLPipeline.run_dynamic_etl()` processes the `column_mappings` list, it reads the `transform_type` field of each mapping dict to decide which `DataTransformer` method to invoke:
+
+```python
+column_mappings = [
+    # Pass-through — no transformation
+    {"source_column": "CustomerID",  "transform_type": "none",  "target_column": "CustomerID"},
+
+    # Text case
+    {"source_column": "CompanyName", "transform_type": "upper", "target_column": "CompanyName"},
+    {"source_column": "ContactName", "transform_type": "lower", "target_column": "ContactNameLower"},
+
+    # Date extraction
+    {"source_column": "OrderDate",   "transform_type": "year",  "target_column": "OrderYear"},
+    {"source_column": "ShipDate",    "transform_type": "month", "target_column": "ShipMonth"},
+
+    # Concat — uses a different dict shape with type="concat"
+    {"type": "concat", "column1": "City", "column2": "Country", "target_column": "CityCountry"},
+]
+```
+
+The mapping between `transform_type` values and `DataTransformer` methods is:
+
+| `transform_type` | Method called | Notes |
+|---|---|---|
+| `none` | Direct assignment: `df[target] = df[source]` | Column is copied as-is |
+| `upper` | `capitalize_transform(..., operation='upper')` | |
+| `lower` | `capitalize_transform(..., operation='lower')` | |
+| `year` | `date_transform(..., operation='year')` | |
+| `month` | `date_transform(..., operation='month')` | |
+| `day` | `date_transform(..., operation='day')` | |
+| N/A (`type: concat`) | `concat_transform(...)` | Dict uses `type`, not `transform_type` |

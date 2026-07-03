@@ -1,0 +1,113 @@
+---
+title: "Running the ETL Dinámico Test Suite with Pytest"
+sidebarTitle: "Running Tests"
+description: "Run ETL Dinámico's pytest suite to verify connection health, transformer logic, incremental loader filtering, and full pipeline orchestration."
+---
+
+ETL Dinámico ships with four pytest test modules that together cover every layer of the pipeline — from live database connectivity to full end-to-end orchestration. Two of the four tests are completely database-free (pure unit tests with mocks), one verifies incremental-load filtering logic using patched I/O, and one confirms that both the OLTP and OLAP SQL Server connections are alive. Running the full suite takes only a few seconds and gives you immediate confidence that every component is working correctly.
+
+## Prerequisites
+
+Before running the test suite, make sure the following are in place:
+
+<CardGroup cols={3}>
+  <Card title="Virtual Environment" icon="terminal">
+    Your project virtual environment must be activated so that all dependencies resolve from the correct location.
+  </Card>
+  <Card title=".env Configured" icon="file-lock">
+    A valid `.env` file with `OLTP_*` and `OLAP_*` connection variables must exist in the project root for connection tests to pass.
+  </Card>
+  <Card title="pytest ≥ 9.1.1" icon="flask">
+    `pytest>=9.1.1` must be installed. It is listed in `requirements.txt` and is installed automatically in a fresh virtual environment.
+  </Card>
+</CardGroup>
+
+Verify your pytest installation before running:
+
+```bash
+pytest --version
+```
+
+## Running the Tests
+
+<Steps>
+  <Step title="Run all tests">
+    Execute every test module in the `tests/` directory with verbose output:
+
+    ```bash
+    pytest tests/ -v
+    ```
+
+    This runs all four test functions across all four files in dependency-safe order.
+  </Step>
+
+  <Step title="Run a specific test file">
+    Target a single module by passing its path directly:
+
+    ```bash
+    pytest tests/test_transformer.py -v
+    ```
+
+    Replace `test_transformer.py` with any other module name to isolate a different layer.
+  </Step>
+
+  <Step title="Run a single test function">
+    Use the `::test_name` selector to run exactly one test case:
+
+    ```bash
+    pytest tests/test_transformer.py::test_transformaciones_pandas -v
+    ```
+
+    This is useful during development when you want fast feedback on a specific assertion.
+  </Step>
+</Steps>
+
+## Test Modules at a Glance
+
+<CardGroup cols={2}>
+  <Card title="test_connection.py" icon="database">
+    **`test_conexiones()`** — Requires a live SQL Server connection. Creates a `DatabaseClient` instance and executes `SELECT 1` against both the OLTP and OLAP engines, asserting that each returns `1`.
+  </Card>
+  <Card title="test_transformer.py" icon="wand-magic-sparkles">
+    **`test_transformaciones_pandas()`** — Pure unit test; no database required. Exercises `capitalize_transform` (uppercase), `concat_transform` (column concatenation), and `date_transform` (year extraction) on a small in-memory DataFrame.
+  </Card>
+  <Card title="test_loader.py" icon="filter">
+    **`test_carga_incremental_filtra_correctamente()`** — Mocks the database client and patches `pd.read_sql` to simulate an existing DW row (`CustomerID=10`). Asserts that `to_sql` is called exactly once, proving the already-loaded row is filtered out and only `CustomerID=20` is inserted.
+  </Card>
+  <Card title="test_pipelines.py" icon="sitemap">
+    **`test_flujo_completo_con_datos_reales()`** — Mocks the extractor and loader, then drives a full `ETLPipeline.run_dynamic_etl()` call with three territory rows and an `upper` column mapping. Verifies `status`, `rows_extracted`, and that the `New_Name` column contains correctly uppercased values.
+  </Card>
+</CardGroup>
+
+## Connection Test Warning
+
+<Note>
+  `test_connection.py` requires a **real, running SQL Server instance**. If your `.env` file is missing, contains incorrect credentials, or your SQL Server is unreachable, `test_conexiones` will fail with an assertion error. The remaining three tests are entirely mock-based and will pass regardless of database availability.
+</Note>
+
+## Running Without a Database
+
+<Tip>
+  If you are working in an environment without SQL Server access, skip the connection test and run only the mock-based suite:
+
+  ```bash
+  pytest tests/test_transformer.py tests/test_loader.py tests/test_pipelines.py -v
+  ```
+
+  All three of these tests use `MagicMock` and `patch` to replace real database calls, so they pass in any environment where Python dependencies are installed.
+</Tip>
+
+## Expected Output
+
+When all four tests pass, pytest prints a report similar to the following:
+
+```bash
+tests/test_connection.py::test_conexiones PASSED
+tests/test_transformer.py::test_transformaciones_pandas PASSED
+tests/test_loader.py::test_carga_incremental_filtra_correctamente PASSED
+tests/test_pipelines.py::test_flujo_completo_con_datos_reales PASSED
+
+4 passed in X.XXs
+```
+
+Each `PASSED` line confirms that the corresponding layer of the ETL stack is behaving correctly. If any line shows `FAILED` or `ERROR`, check the traceback printed below the summary — the most common cause is a misconfigured `.env` (connection tests) or a breaking change in a service class (unit tests).

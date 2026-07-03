@@ -1,0 +1,334 @@
+---
+title: "Test Reference: All Test Cases in ETL Dinámico"
+sidebarTitle: "Test Reference"
+description: "Complete reference for all test cases in ETL Dinámico's pytest suite, covering what each test asserts and how mocking is used for database-independent testing."
+---
+
+ETL Dinámico's test suite is organized into four files — one per architectural layer. This reference documents every test function: what it exercises, what external dependencies it requires, which objects are mocked, and exactly what assertions it makes. Use this page as a map when a test fails and you need to understand what the failure is telling you about a specific component.
+
+---
+
+## test_connection.py
+
+This module contains a single integration test that directly exercises the `DatabaseClient` class. Unlike the other three modules, it does not use any mocking — it requires real SQL Server endpoints to be reachable.
+
+### test_conexiones
+
+<CardGroup cols={2}>
+  <Card title="What it tests" icon="plug">
+    Both the OLTP and OLAP database connections are alive and capable of executing a basic query.
+  </Card>
+  <Card title="Requirements" icon="server">
+    A live SQL Server instance reachable from the host machine, with correct credentials in `.env`.
+  </Card>
+</CardGroup>
+
+**How it works:**
+
+The test instantiates `DatabaseClient` and uses each engine's context manager (`get_oltp_connection`, `get_olap_connection`) to execute `SELECT 1` via SQLAlchemy's `text()` construct. The scalar result is compared to `1` using a ternary assignment. If the connection or query raises any exception, the flag is set to `False` and the final `assert` fails cleanly rather than raising an unhandled exception.
+
+**Assertions:**
+- `conexion_viva_1 is True` — the OLTP engine returned `SELECT 1 = 1`
+- `conexion_viva_2 is True` — the OLAP engine returned `SELECT 1 = 1`
+
+```python
+from src.infrastructure.db_client import DatabaseClient
+from sqlalchemy import text
+import pandas as pd
+
+def test_conexiones():
+    database_client = DatabaseClient()
+    try:
+        with database_client.get_oltp_connection() as connection:
+            resultado = connection.execute(text('SELECT 1')).scalar()
+            conexion_viva_1 = True if resultado == 1 else False
+    except Exception:
+        conexion_viva_1 = False
+
+    assert conexion_viva_1 is True
+
+    try:
+        with database_client.get_olap_connection() as connection:
+            resultado = connection.execute(text('SELECT 1')).scalar()
+            conexion_viva_2 = True if resultado == 1 else False
+    except Exception:
+        conexion_viva_2 = False
+
+    assert conexion_viva_2 is True
+```
+
+<Warning>
+  This test **will fail** if SQL Server is unreachable or if `.env` contains wrong credentials. The `try/except` blocks prevent Python from raising an unhandled error, but the final `assert` will still report `FAILED`. Check your connection string environment variables first.
+</Warning>
+
+---
+
+## test_transformer.py
+
+This module contains a pure unit test for the `DataTransformer` service class. It operates entirely on an in-memory Pandas DataFrame and makes no network calls, database connections, or file I/O of any kind.
+
+### test_transformaciones_pandas
+
+<CardGroup cols={2}>
+  <Card title="What it tests" icon="wand-magic-sparkles">
+    All three `DataTransformer` methods — `capitalize_transform`, `concat_transform`, and `date_transform` — produce correct output on the same DataFrame.
+  </Card>
+  <Card title="Requirements" icon="circle-check">
+    No database required. Pure Pandas — passes in any environment with dependencies installed.
+  </Card>
+</CardGroup>
+
+**Input DataFrame:**
+
+| Nombre     | CodigoRegion | Fecha      |
+|------------|--------------|------------|
+| Honduras   | HN           | 06-11-2026 |
+| Cabo Verde | CBV          | 06-26-2026 |
+
+**Transformations applied (in order):**
+
+<Steps>
+  <Step title="capitalize_transform — uppercase">
+    Calls `transformer.capitalize_transform(df, 'Nombre', 'NOMBRE MAYUSCULA', 'upper')`. Reads the `Nombre` column, converts each value to uppercase, and writes the result into a new column called `NOMBRE MAYUSCULA`.
+  </Step>
+  <Step title="concat_transform — column concatenation">
+    Calls `transformer.concat_transform(df, 'Nombre CodigoRegion', 'Nombre', 'CodigoRegion')`. Concatenates the `Nombre` and `CodigoRegion` columns with a space separator and writes the result into a new column named `Nombre CodigoRegion`.
+  </Step>
+  <Step title="date_transform — year extraction">
+    Calls `transformer.date_transform(df, 'Fecha', 'Anio', 'year')`. Parses the `Fecha` string column as a date and extracts the year component into a new integer column called `Anio`.
+  </Step>
+</Steps>
+
+**Assertions:**
+- `df.iloc[0]['NOMBRE MAYUSCULA'] == 'HONDURAS'` — uppercase applied to row 0
+- `df.iloc[1]['Nombre CodigoRegion'] == 'Cabo Verde CBV'` — concat applied to row 1
+- `df.iloc[0]['Anio'] == 2026` — year extracted from row 0's date
+
+```python
+import pandas as pd
+from src.services.transformer import DataTransformer
+
+def test_transformaciones_pandas():
+    datos_prueba = {
+        'Nombre': ['Honduras', 'Cabo Verde'],
+        'CodigoRegion': ['HN', 'CBV'],
+        'Fecha': ['06-11-2026', '06-26-2026']
+    }
+
+    df_prueba = pd.DataFrame(datos_prueba)
+
+    transformer = DataTransformer()
+
+    transformer.capitalize_transform(df_prueba, 'Nombre', 'NOMBRE MAYUSCULA', 'upper')
+    transformer.concat_transform(df_prueba, 'Nombre CodigoRegion', 'Nombre', 'CodigoRegion')
+    transformer.date_transform(df_prueba, 'Fecha', 'Anio', 'year')
+
+    assert df_prueba.iloc[0]['NOMBRE MAYUSCULA'] == 'HONDURAS'
+    assert df_prueba.iloc[1]['Nombre CodigoRegion'] == 'Cabo Verde CBV'
+    assert df_prueba.iloc[0]['Anio'] == 2026
+```
+
+<Tip>
+  Because `DataTransformer` mutates the DataFrame in place, all three transform calls operate on the same `df_prueba` object. The assertions verify output columns written by each individual call — there is no risk of one transform overwriting another's output column.
+</Tip>
+
+---
+
+## test_loader.py
+
+This module tests the incremental-load logic inside `DataLoader`. The core behavior under test is the deduplication step: rows whose business key already exists in the Data Warehouse must be silently dropped before `to_sql` is called. The test uses `MagicMock` and `patch` to replace all real database I/O.
+
+### test_carga_incremental_filtra_correctamente
+
+<CardGroup cols={2}>
+  <Card title="What it tests" icon="filter">
+    The incremental loader correctly identifies rows already present in the DW by their business key and excludes them from the insert, calling `to_sql` exactly once with only the new rows.
+  </Card>
+  <Card title="Mocking strategy" icon="masks-theater">
+    `DatabaseClient` replaced by `MagicMock`, `pd.read_sql` patched to return a simulated existing-DW DataFrame, `DataFrame.to_sql` patched to capture the call without touching any database.
+  </Card>
+</CardGroup>
+
+**Mocking setup:**
+
+<Accordion title="Step-by-step mock configuration">
+  1. `mock_db_client = MagicMock()` — replaces the real `DatabaseClient` so no connection string is needed.
+  2. `mock_connection = MagicMock()` — stands in for the SQLAlchemy connection object.
+  3. `mock_db_client.get_olap_connection.return_value.__enter__.return_value = mock_connection` — wires the context manager protocol so `with db_client.get_olap_connection() as conn` returns `mock_connection`.
+  4. `pd.read_sql = MagicMock(return_value=df_dw_simulado)` — causes any call to `pd.read_sql` to return a DataFrame containing only `CustomerID=10`, simulating the current state of the `DimCustomer` table.
+  5. `patch.object(pd.DataFrame, "to_sql")` — intercepts the `to_sql` call so nothing is actually written; the mock records the call for assertion.
+</Accordion>
+
+**Input data:**
+
+| CustomerID | Nombre |
+|------------|--------|
+| 10         | Juan   |
+| 20         | Pedro  |
+
+The DW already contains `CustomerID=10`. The loader must detect this, drop the first row, and insert only `CustomerID=20`.
+
+**Assertion:**
+- `mock_to_sql.assert_called_once()` — `to_sql` was invoked exactly one time, confirming the filtered (single-row) DataFrame was passed to the insert operation.
+
+```python
+from unittest.mock import MagicMock, patch
+import pandas as pd
+from src.services.loader import DataLoader
+
+def test_carga_incremental_filtra_correctamente():
+    mock_db_client = MagicMock()
+    mock_connection = MagicMock()
+
+    mock_db_client.get_olap_connection.return_value.__enter__.return_value = mock_connection
+
+    df_dw_simulado = pd.DataFrame({"CustomerID": [10]})
+    pd.read_sql = MagicMock(return_value=df_dw_simulado)
+
+    loader = DataLoader(mock_db_client)
+
+    datos_transformados = {
+        "CustomerID": [10, 20],
+        "Nombre": ["Juan", "Pedro"]
+    }
+
+    df_transformado = pd.DataFrame(datos_transformados)
+
+    with patch.object(pd.DataFrame, "to_sql") as mock_to_sql:
+        loader.load_incremental(
+            df_transformado,
+            table_name="DimCustomer",
+            business_key="CustomerID"
+        )
+        mock_to_sql.assert_called_once()
+```
+
+<Note>
+  `assert_called_once()` only verifies the **count** of calls — it does not inspect which rows were actually passed. To also assert the content of the inserted DataFrame, you can use `mock_to_sql.call_args` to retrieve the arguments and run further assertions on the resulting DataFrame slice.
+</Note>
+
+---
+
+## test_pipelines.py
+
+This module tests the complete ETL orchestration path through `ETLPipeline.run_dynamic_etl()`. Both the extractor and loader are replaced with mocks, so the test focuses entirely on whether the pipeline correctly wires extraction → transformation → loading and returns the expected result dictionary.
+
+### test_flujo_completo_con_datos_reales
+
+<CardGroup cols={2}>
+  <Card title="What it tests" icon="sitemap">
+    Full ETL orchestration: a dynamic column mapping is applied through the transformer, the correct result metadata is returned, and the DataFrame passed to the loader contains properly uppercased column values.
+  </Card>
+  <Card title="Mocking strategy" icon="masks-theater">
+    `extract_by_table` replaced with a `MagicMock` that returns a fixed 3-row DataFrame; `load_incremental` replaced with a `MagicMock` that returns `3` — no database calls of any kind.
+  </Card>
+</CardGroup>
+
+**Pipeline configuration:**
+
+| Parameter       | Value                    |
+|-----------------|--------------------------|
+| `source_table`  | `Sales.SalesTerritory`   |
+| `target_table`  | `DimTerritory`           |
+| `business_key`  | `TerritoryID`            |
+
+**Column mappings:**
+
+| source_column | transform_type | target_column |
+|---------------|----------------|---------------|
+| `Name`        | `upper`        | `New_Name`    |
+| `TerritoryID` | `none`         | `TerritoryID` |
+
+**Source DataFrame (mocked extractor output):**
+
+| TerritoryID | Name      | CountryRegionCode |
+|-------------|-----------|-------------------|
+| 1           | northwest | US                |
+| 2           | southeast | US                |
+| 3           | central   | US                |
+
+**Expected DataFrame delivered to the loader:**
+
+The `upper` mapping means the `Name` column is uppercased and written into `New_Name`. `TerritoryID` passes through unchanged. The `CountryRegionCode` column is not included in the mappings and is therefore dropped during transformation.
+
+**Assertions:**
+
+<Steps>
+  <Step title="Result metadata">
+    `resultado['status'] == 'success'` — the pipeline completed without error.
+
+    `resultado['rows_extracted'] == 3` — the full source DataFrame (3 rows) was extracted.
+  </Step>
+  <Step title="Transformed DataFrame structure">
+    `'New_Name' in df_cargado.columns` — the uppercase mapping created the target column correctly.
+  </Step>
+  <Step title="Transformed DataFrame values">
+    `df_cargado.iloc[0]['New_Name'] == 'NORTHWEST'` — row 0 uppercased.
+
+    `df_cargado.iloc[1]['New_Name'] == 'SOUTHEAST'` — row 1 uppercased.
+  </Step>
+</Steps>
+
+```python
+from src.services.pipeline import ETLPipeline
+from unittest.mock import MagicMock
+import pandas as pd
+
+def test_flujo_completo_con_datos_reales():
+    # 1. PREPARAR
+    mock_db_client = MagicMock()
+    pipeline = ETLPipeline(mock_db_client)
+
+    tabla_origen = "Sales.SalesTerritory"
+    tabla_destino = "DimTerritory"
+    llave_negocio = "TerritoryID"
+
+    column_mappings = [
+        {
+            "source_column": "Name",
+            "transform_type": "upper",
+            "target_column": "New_Name"
+        },
+        {
+            "source_column": "TerritoryID",
+            "transform_type": "none",
+            "target_column": "TerritoryID"
+        }
+    ]
+
+    # Datos simulados para el extractor
+    datos_origen = {
+        "TerritoryID": [1, 2, 3],
+        "Name": ["northwest", "southeast", "central"],
+        "CountryRegionCode": ["US", "US", "US"]
+    }
+    df_origen = pd.DataFrame(datos_origen)
+
+    # Mockeamos extractor y loader para evitar base de datos real
+    pipeline.extractor.extract_by_table = MagicMock(return_value=df_origen)
+    pipeline.loader.load_incremental = MagicMock(return_value=3)
+
+    # 2. ACTUAR
+    resultado = pipeline.run_dynamic_etl(
+        source_table=tabla_origen,
+        target_table=tabla_destino,
+        business_key=llave_negocio,
+        column_mappings=column_mappings
+    )
+
+    # 3. AFIRMAR
+    assert resultado["status"] == "success"
+    assert resultado["rows_extracted"] == 3
+
+    # Verificar que el loader recibió el DataFrame transformado
+    df_cargado = pipeline.loader.load_incremental.call_args[0][0]
+
+    # Verificar que la columna 'New_Name' se haya creado correctamente en mayúsculas
+    assert "New_Name" in df_cargado.columns
+    assert df_cargado.iloc[0]["New_Name"] == "NORTHWEST"
+    assert df_cargado.iloc[1]["New_Name"] == "SOUTHEAST"
+```
+
+<Tip>
+  The line `df_cargado = pipeline.loader.load_incremental.call_args[0][0]` retrieves the first positional argument from the first (and only) call to the mocked `load_incremental`. This pattern lets you inspect the exact DataFrame the pipeline handed off to the loader without needing a real database — a powerful technique for asserting on intermediate pipeline state.
+</Tip>

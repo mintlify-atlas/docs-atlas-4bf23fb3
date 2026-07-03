@@ -1,0 +1,105 @@
+{
+  "projectType": "data-platform",
+  "projectName": "ETL Dinámico para Data Warehouse",
+  "projectDescription": "A modular, dynamic ETL system built with Python that extracts data from SQL Server OLTP databases, applies configurable transformations via Pandas, and loads results incrementally into a Data Warehouse using an interactive Streamlit UI.",
+  "theme": "aspen",
+  "primaryColor": "#2563EB",
+  "lightColor": "#EFF6FF",
+  "darkColor": "#1E3A5F",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "configuration"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/data-flow"
+            ]
+          },
+          {
+            "group": "ETL Pipeline",
+            "pages": [
+              "pipeline/extraction",
+              "pipeline/transformation",
+              "pipeline/loading",
+              "pipeline/running-etl"
+            ]
+          },
+          {
+            "group": "UI Guide",
+            "pages": [
+              "ui/dashboard",
+              "ui/column-mapping",
+              "ui/incremental-load"
+            ]
+          },
+          {
+            "group": "Testing & Development",
+            "pages": [
+              "testing/running-tests",
+              "testing/test-reference"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core Classes",
+            "pages": [
+              "api/database-client",
+              "api/data-extractor",
+              "api/data-transformer",
+              "api/data-loader",
+              "api/etl-pipeline"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "api/settings"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Dynamic column mapping configured at runtime — no hardcoded schema",
+    "Incremental loading using business keys to prevent duplicate records",
+    "Multiple transform types: upper/lower case, date component extraction (year/month/day), and column concatenation",
+    "Dual-database architecture: reads from OLTP (SQL Server), writes to OLAP Data Warehouse",
+    "Interactive Streamlit dashboard for no-code ETL configuration and execution",
+    "Custom SQL query support as an alternative to full-table extraction",
+    "Column preview with data types shown in the UI before running ETL",
+    "Automated test suite with pytest covering all ETL layers"
+  ],
+  "publicApiSurface": [
+    "DatabaseClient.__init__()",
+    "DatabaseClient.get_oltp_connection()",
+    "DatabaseClient.get_olap_connection()",
+    "DatabaseClient.get_oltp_tables()",
+    "DatabaseClient.get_olap_tables()",
+    "DatabaseClient.get_source_columns(table_name)",
+    "DatabaseClient.get_target_columns(table_name)",
+    "DataExtractor.extract_by_table(table_name, columns, limit)",
+    "DataExtractor.extract_by_query(sql_query, limit)",
+    "DataExtractor.extract_tables()",
+    "DataTransformer.capitalize_transform(df, column, new_column, operation)",
+    "DataTransformer.concat_transform(df, new_column, column1, column2)",
+    "DataTransformer.date_transform(df, column, new_column, operation)",
+    "DataLoader.load_incremental(df_transformer, table_name, business_key)",
+    "ETLPipeline.run_dynamic_etl(source_table, target_table, business_key, column_mappings, sql_query)"
+  ]
+}

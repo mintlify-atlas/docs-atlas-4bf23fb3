@@ -1,0 +1,137 @@
+---
+title: "Incremental Loading to the Data Warehouse"
+sidebarTitle: "Loading"
+description: "DataLoader.load_incremental() deduplicates records by business key before appending only new rows to the OLAP Data Warehouse table using SQLAlchemy."
+---
+
+`DataLoader` is the final stage of the ETL pipeline. Its single public method, `load_incremental()`, writes transformed data into the OLAP Data Warehouse while ensuring that records already present in the target table are never duplicated. It achieves this by reading the existing set of business key values from the DW table before writing, then filtering the incoming `DataFrame` to keep only rows whose key has not been seen before. Only the net-new rows are appended.
+
+## What is a business key?
+
+A business key is a column that uniquely identifies each record in the target Data Warehouse table — for example `CustomerID` in a `DimCustomers` dimension, or `TerritoryID` in a `DimSalesTerritory` table. `load_incremental()` uses this key as the deduplication criterion: if a row arriving from the OLTP source already has a matching key in the DW table, it is silently skipped. If the key is new, the row is inserted.
+
+<Info>
+  The business key column must be present in the transformed `DataFrame` **and** must be mapped in `column_mappings` so that `ETLPipeline` includes it in the final column selection before handing the data to `DataLoader`.
+</Info>
+
+---
+
+## `load_incremental`
+
+```python
+load_incremental(df_transformer, table_name: str, business_key: str) -> int
+```
+
+<ParamField path="df_transformer" type="pd.DataFrame" required>
+  The transformed DataFrame produced by `DataTransformer`. Must contain the column named by `business_key`.
+</ParamField>
+
+<ParamField path="table_name" type="str" required>
+  Name of the target table in the OLAP Data Warehouse (e.g., `"DimCustomers"`). The table must already exist — `load_incremental` uses `if_exists='append'` and will not create a new table.
+</ParamField>
+
+<ParamField path="business_key" type="str" required>
+  The column name to use for deduplication. Must exist in both `df_transformer` and the target DW table.
+</ParamField>
+
+**Returns:** `int` — the number of rows actually inserted into the DW table.
+
+---
+
+## Step-by-step loading logic
+
+<Steps>
+  <Step title="Connect to the OLAP database">
+    Opens a connection to the Data Warehouse via `db_client.get_olap_connection()`, which returns a SQLAlchemy connection context manager.
+  </Step>
+  <Step title="Read existing business keys">
+    Fetches all current values of the business key column from the target table:
+
+    ```sql
+    SELECT {business_key} FROM {table_name}
+    ```
+
+    The result is loaded into a Python list (`valid_keys`).
+  </Step>
+  <Step title="Filter for new rows only">
+    Removes any rows from the incoming DataFrame whose business key already appears in the DW:
+
+    ```python
+    df_load = df_transformer[~df_transformer[business_key].isin(valid_keys)]
+    ```
+
+    Rows with a key that matches an existing DW record are dropped. Only genuinely new rows remain in `df_load`.
+  </Step>
+  <Step title="Append new rows">
+    Writes `df_load` to the target DW table using `pandas.DataFrame.to_sql` with `if_exists='append'` and `index=False`:
+
+    ```python
+    df_load.to_sql(table_name, conn, if_exists='append', index=False)
+    ```
+  </Step>
+  <Step title="Commit the transaction">
+    Explicitly commits the connection to persist the insert:
+
+    ```python
+    conn.commit()
+    ```
+  </Step>
+  <Step title="Return the insert count">
+    Returns `len(df_load)` — the number of rows that were actually written to the DW table.
+  </Step>
+</Steps>
+
+---
+
+## Code example
+
+```python
+from src.infrastructure.db_client import DatabaseClient
+from src.services.loader import DataLoader
+import pandas as pd
+
+db_client = DatabaseClient()
+loader = DataLoader(db_client)
+
+# df already transformed by DataTransformer
+rows_inserted = loader.load_incremental(
+    df_transformer=df,
+    table_name="DimCustomers",
+    business_key="CustomerID"
+)
+print(f"Inserted {rows_inserted} new rows")
+```
+
+### First run vs. subsequent runs
+
+```python
+# First run — DimCustomers is empty, all 91 rows are new
+rows_inserted = loader.load_incremental(df, "DimCustomers", "CustomerID")
+print(rows_inserted)  # 91
+
+# Second run — same data, all keys already exist
+rows_inserted = loader.load_incremental(df, "DimCustomers", "CustomerID")
+print(rows_inserted)  # 0
+
+# Third run — 5 new customers added to OLTP since last run
+rows_inserted = loader.load_incremental(df_with_new, "DimCustomers", "CustomerID")
+print(rows_inserted)  # 5
+```
+
+---
+
+## Return value
+
+<ResponseField name="rows_inserted" type="int">
+  The number of rows appended to the target DW table during this call. Will be `0` if all incoming records already exist in the table (no-op run). This value is surfaced in the `ETLPipeline` result dict as `"rows_loaded"`.
+</ResponseField>
+
+---
+
+<Warning>
+  The target table **must already exist** in the Data Warehouse before calling `load_incremental`. The method uses `if_exists='append'`, which will raise an error if the table does not exist. It will never create a new table or replace an existing one. Use your DW schema management tooling to create the destination table before running the pipeline for the first time.
+</Warning>
+
+<Tip>
+  The business key must be present in **both** the incoming `DataFrame` and the target DW table. If the key column is missing from the DataFrame, the `isin()` filter step will raise a `KeyError`. Ensure the key column is included in `column_mappings` when using `ETLPipeline.run_dynamic_etl()`.
+</Tip>

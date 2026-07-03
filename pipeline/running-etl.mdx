@@ -1,0 +1,224 @@
+---
+title: "Running the Full ETL Pipeline with ETLPipeline"
+sidebarTitle: "Running ETL"
+description: "ETLPipeline.run_dynamic_etl() orchestrates extraction, transformation, and incremental loading in one call. Returns row counts and a sample of loaded data."
+---
+
+`ETLPipeline` is the top-level orchestrator that wires together `DataExtractor`, `DataTransformer`, and `DataLoader` into a single, declarative call. Instead of invoking each stage manually, you describe what data to move and how to transform it through a `column_mappings` list — the pipeline takes care of extraction, column-by-column transformation, deduplication, and incremental loading in the correct order.
+
+## How `ETLPipeline` is constructed
+
+`ETLPipeline` accepts a `DatabaseClient` and internally instantiates the three service classes:
+
+```python
+from src.infrastructure.db_client import DatabaseClient
+from src.services.pipeline import ETLPipeline
+
+db_client = DatabaseClient()
+pipeline = ETLPipeline(db_client)
+# Internally creates:
+#   self.extractor = DataExtractor(db_client)
+#   self.transformer = DataTransformer()
+#   self.loader = DataLoader(db_client)
+```
+
+---
+
+## `run_dynamic_etl`
+
+```python
+run_dynamic_etl(
+    source_table: str,
+    target_table: str,
+    business_key: str,
+    column_mappings: list[dict],
+    sql_query: str | None = None
+) -> dict
+```
+
+### Parameters
+
+<ParamField path="source_table" type="str" required>
+  Schema-qualified OLTP table name to extract from (e.g., `"dbo.Customers"`, `"Sales.SalesOrderHeader"`). When using a custom `sql_query` instead, pass an empty string `""` here — the pipeline will skip the table-based extraction path and use the query instead.
+</ParamField>
+
+<ParamField path="target_table" type="str" required>
+  Name of the destination table in the OLAP Data Warehouse (e.g., `"DimCustomers"`). Must already exist in the DW — the loader appends to it and will not create it.
+</ParamField>
+
+<ParamField path="business_key" type="str" required>
+  Column name used to deduplicate records between the incoming DataFrame and the existing DW table. Must be present in `column_mappings` so it appears in the final DataFrame handed to the loader.
+</ParamField>
+
+<ParamField path="column_mappings" type="list[dict]" required>
+  A list of mapping dicts that defines which source columns to extract, how to transform them, and what to name them in the target. See [Column mappings structure](#column-mappings-structure) below.
+</ParamField>
+
+<ParamField path="sql_query" type="str | None">
+  An optional custom SQL query string. When provided, this overrides `source_table` extraction — `DataExtractor.extract_by_query()` is called instead of `extract_by_table()`. Defaults to `None`.
+</ParamField>
+
+---
+
+## Column mappings structure
+
+Each dict in `column_mappings` follows one of two shapes depending on whether the mapping is a standard column transform or a string concatenation.
+
+**Standard mapping** — for pass-through, text case, and date transforms:
+
+```python
+{
+    "source_column": "OrderDate",   # Column name in the OLTP source
+    "transform_type": "year",       # One of: none, upper, lower, year, month, day
+    "target_column": "OrderYear"    # Column name to write in the target DW
+}
+```
+
+**Concat mapping** — for joining two string columns with a space:
+
+```python
+{
+    "type": "concat",          # Must be exactly "concat"
+    "column1": "FirstName",    # First source column
+    "column2": "LastName",     # Second source column
+    "target_column": "FullName"
+}
+```
+
+### All valid `transform_type` values
+
+| Value | Transformation applied | Output type |
+|---|---|---|
+| `none` | Direct copy: `df[target] = df[source]` | Same as source |
+| `upper` | `.str.upper()` | string |
+| `lower` | `.str.lower()` | string |
+| `year` | `pd.to_datetime()` then `.dt.year` | integer |
+| `month` | `pd.to_datetime()` then `.dt.month` | integer |
+| `day` | `pd.to_datetime()` then `.dt.day` | integer |
+
+---
+
+## Return value
+
+`run_dynamic_etl` returns a dict with the following fields:
+
+<ResponseField name="status" type="str">
+  Always `"success"` when the pipeline completes without raising an exception.
+</ResponseField>
+
+<ResponseField name="rows_extracted" type="int">
+  Total number of rows retrieved from the OLTP source (before deduplication filtering).
+</ResponseField>
+
+<ResponseField name="rows_loaded" type="int">
+  Number of net-new rows actually inserted into the DW table (after deduplication).
+</ResponseField>
+
+<ResponseField name="table_destination" type="str">
+  The `target_table` name, echoed back for logging and UI display.
+</ResponseField>
+
+<ResponseField name="sample_data" type="pd.DataFrame">
+  The first 5 rows of the final loaded DataFrame (`df_load.head(5)`), useful for previewing results in the Streamlit UI.
+</ResponseField>
+
+```python
+# Example return value
+{
+    "status": "success",
+    "rows_extracted": 91,
+    "rows_loaded": 12,
+    "table_destination": "DimCustomers",
+    "sample_data": DataFrame  # first 5 rows of loaded data
+}
+```
+
+---
+
+## Pipeline execution order
+
+<Steps>
+  <Step title="Extract">
+    If `source_table` is non-empty, `DataExtractor.extract_by_table()` is called. The pipeline automatically builds the column list from `column_mappings` — it unions `source_column` values from standard mappings with `column1` and `column2` values from concat mappings, so only the columns actually needed are fetched from OLTP.
+
+    If `sql_query` is provided, `DataExtractor.extract_by_query()` is called instead and the full query result is used.
+  </Step>
+  <Step title="Transform">
+    The pipeline iterates over `column_mappings` in order. For each dict it calls the appropriate `DataTransformer` method based on `transform_type` (or `type="concat"`). All transformations operate on the same in-memory DataFrame.
+  </Step>
+  <Step title="Select target columns">
+    After all transformations, the DataFrame is narrowed to only the columns declared as `target_column` in `column_mappings` plus the `business_key`. Source columns that were not mapped as targets are dropped at this stage.
+  </Step>
+  <Step title="Load incrementally">
+    `DataLoader.load_incremental()` deduplicates against the existing DW table and appends only new rows. The count of inserted rows is captured.
+  </Step>
+  <Step title="Return result dict">
+    The pipeline assembles and returns the result dict containing status, row counts, destination table name, and a 5-row sample.
+  </Step>
+</Steps>
+
+---
+
+## Complete usage example
+
+```python
+from src.infrastructure.db_client import DatabaseClient
+from src.services.pipeline import ETLPipeline
+
+db_client = DatabaseClient()
+pipeline = ETLPipeline(db_client)
+
+result = pipeline.run_dynamic_etl(
+    source_table="dbo.Customers",
+    target_table="DimCustomers",
+    business_key="CustomerID",
+    column_mappings=[
+        {"source_column": "CustomerID",   "transform_type": "none",  "target_column": "CustomerID"},
+        {"source_column": "CompanyName",  "transform_type": "upper", "target_column": "CompanyName"},
+        {"source_column": "ContactName",  "transform_type": "upper", "target_column": "ContactName"},
+        {"source_column": "OrderDate",    "transform_type": "year",  "target_column": "OrderYear"},
+        {"type": "concat", "column1": "City", "column2": "Country",  "target_column": "CityCountry"},
+    ]
+)
+
+print(f"Status:          {result['status']}")
+print(f"Rows extracted:  {result['rows_extracted']}")
+print(f"Rows loaded:     {result['rows_loaded']}")
+print(f"Destination:     {result['table_destination']}")
+print(result['sample_data'])
+```
+
+---
+
+## Using a custom SQL query instead of `source_table`
+
+When the data you need cannot be expressed as a single table select — for example when you need a filtered subset, a JOIN across tables, or an aggregation — pass your SQL to `sql_query` and set `source_table` to an empty string.
+
+```python
+result = pipeline.run_dynamic_etl(
+    source_table="",
+    target_table="DimTopCustomers",
+    business_key="CustomerID",
+    sql_query="SELECT CustomerID, CompanyName FROM dbo.Customers WHERE Country = 'USA'",
+    column_mappings=[
+        {"source_column": "CustomerID",  "transform_type": "none",  "target_column": "CustomerID"},
+        {"source_column": "CompanyName", "transform_type": "upper", "target_column": "CompanyName"},
+    ]
+)
+```
+
+<Note>
+  When `sql_query` is provided, the pipeline skips the automatic column selection optimisation (which normally queries only the columns referenced in `column_mappings`). The full result set of the query is fetched and then transformed. Ensure your SQL already selects only the columns you need.
+</Note>
+
+---
+
+## Error handling and edge cases
+
+<Warning>
+  If both `source_table` and `sql_query` are provided, the pipeline will execute **both** extraction paths in sequence, with the `sql_query` result overwriting the `source_table` result. Use one or the other, not both.
+</Warning>
+
+<Tip>
+  On a first run against an empty DW table, `rows_loaded` will equal `rows_extracted` (all records are new). On subsequent runs with unchanged source data, `rows_loaded` will be `0` — this is expected behaviour, not an error.
+</Tip>

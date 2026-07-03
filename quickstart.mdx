@@ -1,47 +1,194 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with ETL Dinámico in 5 Steps"
+sidebarTitle: "Quickstart"
+description: "Install ETL Dinámico, configure your SQL Server connections, and run your first dynamic ETL pipeline from source table to Data Warehouse."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+This guide walks you through everything required to go from a fresh machine to a running ETL pipeline in under ten minutes. You will clone the repository, set up a Python virtual environment, install dependencies, create a `.env` configuration file for your SQL Server connections, and launch the Streamlit interface — or run a pipeline directly from Python code.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+<Note>
+A `.env` file must exist at the project root (the same directory as `app.py`) before you start the application or run any pipeline. The `Settings` class loads it at import time; if the file is missing or the variables are undefined, all database connections will fail silently with `None` values.
+</Note>
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
 
-    ```bash
-    npm install your-package
-    ```
-  </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+<Step title="Clone the Repository">
 
-    ```bash
-    your-cli init
-    ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+Download the project source code from GitHub using `git clone`, then navigate into the project directory.
 
+```bash
+git clone https://github.com/obedc295/proyecto_dw.git
+cd proyecto_dw
+```
+
+After cloning you will see the following top-level structure:
+
+```
+proyecto_dw/
+├── app.py              # Streamlit entry point
+├── main.py             # Programmatic entry point
+├── requirements.txt    # Python dependencies
+├── src/
+│   ├── config/
+│   │   └── settings.py          # Environment variable loader & URL builder
+│   ├── infrastructure/
+│   │   └── db_client.py         # SQLAlchemy engine wrapper
+│   └── services/
+│       ├── extractor.py         # DataExtractor
+│       ├── transformer.py       # DataTransformer
+│       ├── loader.py            # DataLoader
+│       └── pipeline.py          # ETLPipeline orchestrator
+└── tests/              # Pytest test suite
+```
+
+</Step>
+
+<Step title="Create and Activate a Python Virtual Environment">
+
+Creating an isolated virtual environment prevents ETL Dinámico's dependencies from conflicting with other Python projects on your machine. Python 3.10 or higher is required.
+
+<Tabs>
+  <Tab title="Windows (PowerShell / CMD)">
     ```bash
-    your-cli start
+    python -m venv .venv
+    .venv\Scripts\activate
     ```
-  </Step>
-</Steps>
+
+    After activation your terminal prompt will be prefixed with `(.venv)`. On PowerShell, if you receive an execution policy error, run `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser` first.
+  </Tab>
+  <Tab title="Linux / macOS / WSL">
+    ```bash
+    python3 -m venv .venv
+    source .venv/bin/activate
+    ```
+
+    After activation your terminal prompt will be prefixed with `(.venv)`. Use `deactivate` at any time to exit the virtual environment.
+  </Tab>
+</Tabs>
+
+</Step>
+
+<Step title="Install Dependencies">
+
+With the virtual environment activated, upgrade `pip` and install all required packages from `requirements.txt`.
+
+```bash
+pip install --upgrade pip && pip install -r requirements.txt
+```
+
+This installs the following packages:
+
+| Package | Version Constraint | Purpose |
+|---|---|---|
+| `pyodbc` | `>=5.0.0` | Low-level ODBC bridge between Python and SQL Server via ODBC Driver 17 |
+| `SQLAlchemy` | `>=2.0.0` | Database engine abstraction; provides connection pooling and the `create_engine` API |
+| `pandas` | `>=2.0.0` | In-memory DataFrame engine used by the Extractor and Transformer |
+| `streamlit` | `>=1.30.0` | Browser-based UI framework for the interactive pipeline control panel |
+| `python-dotenv` | `>=1.0.0` | Reads the `.env` file and injects variables into `os.environ` at startup |
+| `pytest` | `>=9.1.1` | Test runner for the automated unit test suite in the `tests/` directory |
 
 <Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
-
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+If `pyodbc` installation fails on Linux, you may need to install the unixODBC development headers first: `sudo apt-get install unixodbc-dev` (Debian/Ubuntu) or `sudo yum install unixODBC-devel` (RHEL/CentOS).
 </Tip>
+
+</Step>
+
+<Step title="Create the .env Configuration File">
+
+Create a file named `.env` in the project root. This file holds the six connection parameters that `Settings` uses to build SQLAlchemy URLs for both the OLTP source and the OLAP destination.
+
+The example below uses the classic **Northwind** sample database as the OLTP source and a Data Warehouse database called `DW_NORTHWIND` as the OLAP destination, both hosted on a local `SQLEXPRESS` instance:
+
+```ini
+# OLTP Source — transactional / operational database
+OLTP_SERVER=ELIEL\SQLEXPRESS
+OLTP_DATABASE=NORTHWND
+OLTP_DRIVER=ODBC Driver 17 for SQL Server
+
+# OLAP Destination — Data Warehouse
+OLAP_SERVER=ELIEL\SQLEXPRESS
+OLAP_DATABASE=DW_NORTHWIND
+OLAP_DRIVER=ODBC Driver 17 for SQL Server
+```
+
+Replace `ELIEL\SQLEXPRESS` with your actual server name or hostname. If your SQL Server instance is the default (unnamed) instance, use just the hostname or IP address without the backslash and instance name.
+
+<Warning>
+Do not wrap values in quotes inside `.env` files when using `python-dotenv`. Write `OLTP_SERVER=ELIEL\SQLEXPRESS`, not `OLTP_SERVER="ELIEL\SQLEXPRESS"`. The `Settings` class calls `urllib.parse.quote_plus()` to handle the backslash encoding automatically.
+</Warning>
+
+</Step>
+
+<Step title="Launch the Streamlit UI">
+
+With your `.env` file in place, start the interactive pipeline interface by running:
+
+```bash
+streamlit run app.py
+```
+
+Streamlit will compile the application and automatically open a browser tab at:
+
+```
+http://localhost:8501
+```
+
+From the UI you can:
+
+1. **Select a source table** from the OLTP database (or write a custom SQL query).
+2. **Choose columns** to extract and preview up to 10 rows before committing.
+3. **Configure column mappings** — assign each source column a transformation type (`none`, `upper`, `lower`, `year`, `month`, `day`) and map it to a column in the destination table.
+4. **Add concatenation mappings** to combine two source columns (e.g., `FirstName` + `LastName` → `FullName`).
+5. **Set the business key** used for incremental loading.
+6. **Click "Ejecutar ETL"** to run the pipeline and view row counts, a JSON result summary, and a data preview.
+
+</Step>
+
+</Steps>
+
+## Programmatic Usage
+
+You can also drive ETL Dinámico entirely from Python code, bypassing the Streamlit UI. This is useful for scheduled jobs, integration tests, or embedding the pipeline inside a larger orchestration workflow. The example below extracts customer data from the Northwind `dbo.Customers` table, applies `upper` case to the name fields, and loads new records into `DimCustomers` using `CustomerID` as the business key.
+
+```python
+from src.infrastructure.db_client import DatabaseClient
+from src.services.pipeline import ETLPipeline
+
+# Initialise the database client (reads OLTP_URL and OLAP_URL from Settings)
+db_client = DatabaseClient()
+pipeline = ETLPipeline(db_client)
+
+result = pipeline.run_dynamic_etl(
+    source_table="dbo.Customers",
+    target_table="DimCustomers",
+    business_key="CustomerID",
+    column_mappings=[
+        {"source_column": "CustomerID",   "transform_type": "none",  "target_column": "CustomerID"},
+        {"source_column": "CompanyName",  "transform_type": "upper", "target_column": "CompanyName"},
+        {"source_column": "ContactName",  "transform_type": "upper", "target_column": "ContactName"},
+    ]
+)
+
+print(f"Extracted: {result['rows_extracted']}, Loaded: {result['rows_loaded']}")
+# Example output: Extracted: 91, Loaded: 14
+```
+
+The `run_dynamic_etl()` method returns a dictionary with the following keys:
+
+| Key | Type | Description |
+|---|---|---|
+| `status` | `str` | `"success"` if the pipeline completed without raising an exception |
+| `rows_extracted` | `int` | Total number of rows pulled from the source |
+| `rows_loaded` | `int` | Rows actually written to the destination (new records only) |
+| `table_destination` | `str` | The `target_table` argument passed to the call |
+| `sample_data` | `DataFrame` | First 5 rows of the final transformed and loaded DataFrame |
+
+## Running the Test Suite
+
+After installation you can verify that the infrastructure, transformers, loader, and pipeline orchestrator are all working correctly by running:
+
+```bash
+pytest tests/ -v
+```
+
+A passing test run confirms that your Python environment and project structure are correctly configured before you connect to a live database.
